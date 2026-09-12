@@ -1,0 +1,22 @@
+name: realtime-analytics-dashboard
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rad}
+      POSTGRES_DB: ${POSTGRES_DB:-rad}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Postgres 18 images keep data under /var/lib/postgresql (not .../data as in <=17).
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

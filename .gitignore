@@ -1,0 +1,43 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+
+# ---------- Node / frontends ----------
+node_modules/
+dist/
+.angular/
+.expo/
+web-build/
+*.tsbuildinfo
+coverage/
+
+# ---------- Env / secrets ----------
+.env
+.env.*
+!.env.example
+
+# ---------- Data dumps ----------
+*.dump
+*.sql.gz
+*.csv
+/data/
+pgdata/
+
+# Raw benchmark output (summaries under bench/results/ are committed)
+backend/bench/results/raw/
+
+# ---------- OS / editor ----------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
