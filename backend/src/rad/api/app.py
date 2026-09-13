@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from rad import __version__
-from rad.api import routes_health, routes_ingest
+from rad.api import routes_health, routes_ingest, routes_metrics
 from rad.api.services import Services
 from rad.common.config import Settings
 from rad.db.migrate import apply_migrations
@@ -49,4 +49,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="realtime-analytics-dashboard", version=__version__, lifespan=lifespan)
     app.include_router(routes_health.router)
     app.include_router(routes_ingest.router)
+    app.include_router(routes_metrics.router)
     return app

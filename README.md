@@ -12,7 +12,7 @@ and **React Native**.
 
 - [x] M0 — Repo skeleton
 - [x] M1 — Ingestion API (validation, dead letters, group-commit writer, 429 backpressure)
-- [ ] M2 — Processing layer (incremental aggregates)
+- [x] M2 — Processing layer (incremental minute buckets updated in the insert statement, snapshot API)
 - [ ] M3 — Event generator
 - [ ] M4 — WebSocket layer
 - [ ] M5 — Alerting

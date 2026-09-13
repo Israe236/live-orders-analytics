@@ -67,16 +67,125 @@ class _Submission:
 
 type CommitListener = Callable[[CommittedBatch], None]
 
+# One statement = one transaction = one round trip. Raw events and every aggregate are updated
+# together, so the aggregates can never disagree with the events table.
+#
+# Aggregates are fed only from `inserted` — the rows that were really inserted — so duplicate
+# events (retries) never count twice. Each upsert target gets at most one row per key from this
+# statement (GROUP BY / DISTINCT ON): PostgreSQL refuses an ON CONFLICT DO UPDATE that would
+# touch the same row twice in one command.
 INSERT_EVENTS_SQL = """
-INSERT INTO events (
-    event_id, order_id, event_type, occurred_at, amount_mad, category, city, payment_method
+WITH input AS (
+    SELECT *
+    FROM unnest(
+        $1::uuid[], $2::uuid[], $3::text[], $4::timestamptz[],
+        $5::numeric[], $6::text[], $7::text[], $8::text[]
+    ) AS t(event_id, order_id, event_type, occurred_at, amount_mad, category, city, payment_method)
+),
+inserted AS (
+    INSERT INTO events (
+        event_id, order_id, event_type, occurred_at, amount_mad, category, city, payment_method
+    )
+    SELECT event_id, order_id, event_type, occurred_at, amount_mad, category, city, payment_method
+    FROM input
+    ON CONFLICT (event_id) DO NOTHING
+    RETURNING event_id, order_id, occurred_at, amount_mad, category, city, payment_method,
+              date_trunc('minute', occurred_at) AS bucket,
+              replace(event_type, 'order_', '') AS status
+),
+minute_totals AS (
+    INSERT INTO agg_minute AS a (
+        bucket, placed_count, paid_count, shipped_count, cancelled_count,
+        placed_value_mad, revenue_mad
+    )
+    SELECT bucket,
+           count(*) FILTER (WHERE status = 'placed'),
+           count(*) FILTER (WHERE status = 'paid'),
+           count(*) FILTER (WHERE status = 'shipped'),
+           count(*) FILTER (WHERE status = 'cancelled'),
+           coalesce(sum(amount_mad) FILTER (WHERE status = 'placed'), 0),
+           coalesce(sum(amount_mad) FILTER (WHERE status = 'paid'), 0)
+    FROM inserted
+    GROUP BY bucket
+    ON CONFLICT (bucket) DO UPDATE SET
+        placed_count     = a.placed_count     + excluded.placed_count,
+        paid_count       = a.paid_count       + excluded.paid_count,
+        shipped_count    = a.shipped_count    + excluded.shipped_count,
+        cancelled_count  = a.cancelled_count  + excluded.cancelled_count,
+        placed_value_mad = a.placed_value_mad + excluded.placed_value_mad,
+        revenue_mad      = a.revenue_mad      + excluded.revenue_mad
+),
+dimension_totals AS (
+    INSERT INTO agg_minute_dimension AS d (
+        dimension, bucket, value, placed_count, paid_count, cancelled_count, revenue_mad
+    )
+    SELECT dim.dimension, i.bucket, dim.value,
+           count(*) FILTER (WHERE i.status = 'placed'),
+           count(*) FILTER (WHERE i.status = 'paid'),
+           count(*) FILTER (WHERE i.status = 'cancelled'),
+           coalesce(sum(i.amount_mad) FILTER (WHERE i.status = 'paid'), 0)
+    FROM inserted AS i
+    -- Fan each event out to its three dimensions.
+    CROSS JOIN LATERAL (
+        VALUES ('category', i.category), ('city', i.city), ('payment_method', i.payment_method)
+    ) AS dim(dimension, value)
+    WHERE i.status <> 'shipped'
+    GROUP BY dim.dimension, i.bucket, dim.value
+    ON CONFLICT (dimension, bucket, value) DO UPDATE SET
+        placed_count    = d.placed_count    + excluded.placed_count,
+        paid_count      = d.paid_count      + excluded.paid_count,
+        cancelled_count = d.cancelled_count + excluded.cancelled_count,
+        revenue_mad     = d.revenue_mad     + excluded.revenue_mad
+),
+order_updates AS (
+    INSERT INTO orders AS o (
+        order_id, status, amount_mad, category, city, payment_method,
+        first_event_at, last_event_at
+    )
+    -- Several events of the same order may be in this batch: keep the highest-ranked one.
+    SELECT DISTINCT ON (order_id)
+           order_id, status, amount_mad, category, city, payment_method,
+           min(occurred_at) OVER (PARTITION BY order_id),
+           max(occurred_at) OVER (PARTITION BY order_id)
+    FROM inserted
+    ORDER BY order_id, order_status_rank(status) DESC
+    ON CONFLICT (order_id) DO UPDATE SET
+        status = CASE
+                     WHEN order_status_rank(excluded.status) > order_status_rank(o.status)
+                     THEN excluded.status
+                     ELSE o.status
+                 END,
+        first_event_at = least(o.first_event_at, excluded.first_event_at),
+        last_event_at  = greatest(o.last_event_at, excluded.last_event_at)
+    -- PostgreSQL 18: RETURNING can read the row before (old) and after (new) the change.
+    -- old.status is NULL for a brand-new order.
+    RETURNING old.status AS old_status, new.status AS new_status
+),
+status_counts AS (
+    INSERT INTO order_status_counts AS s (status, order_count)
+    SELECT status, sum(delta)
+    FROM (
+        SELECT new_status AS status, 1 AS delta
+        FROM order_updates
+        WHERE old_status IS DISTINCT FROM new_status
+        UNION ALL
+        SELECT old_status, -1
+        FROM order_updates
+        WHERE old_status IS NOT NULL AND old_status <> new_status
+    ) AS changes
+    GROUP BY status
+    ON CONFLICT (status) DO UPDATE SET order_count = s.order_count + excluded.order_count
+),
+ingest_totals AS (
+    INSERT INTO ingest_minute AS m (bucket, accepted_count, duplicate_count)
+    SELECT date_trunc('minute', now()),
+           (SELECT count(*) FROM inserted),
+           (SELECT count(*) FROM input) - (SELECT count(*) FROM inserted)
+    ON CONFLICT (bucket) DO UPDATE SET
+        accepted_count  = m.accepted_count  + excluded.accepted_count,
+        duplicate_count = m.duplicate_count + excluded.duplicate_count
 )
-SELECT * FROM unnest(
-    $1::uuid[], $2::uuid[], $3::text[], $4::timestamptz[],
-    $5::numeric[], $6::text[], $7::text[], $8::text[]
-)
-ON CONFLICT (event_id) DO NOTHING
-RETURNING event_id
+SELECT event_id FROM inserted
 """
 
 

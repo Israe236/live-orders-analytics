@@ -141,7 +141,115 @@ Every index makes every insert slower, and the raw table is write-heavy. It has 
 
 ---
 
-## 4. Problems met and how they were solved
+## 4. Processing layer: time-bucketed aggregates
+
+### Why pre-computed buckets instead of querying the raw events
+The naive dashboard query is `SELECT sum(amount) FROM events WHERE occurred_at > now() - 1 hour`.
+It is correct, but its cost grows with the data: at 500 events/second an hour is 1.8 million rows,
+and the dashboard wants it **every second**, for every chart, for every connected client.
+
+Instead, the system keeps small **summary tables**, one row per minute:
+
+| bucket | placed | paid | shipped | cancelled | revenue |
+|---|---|---|---|---|---|
+| 12:04 | 1,210 | 980 | 640 | 95 | 402,118.50 |
+
+"Revenue in the last hour" becomes a sum over **60 rows**, whatever the traffic. "Revenue per hour
+over 24 hours" is 1,440 rows. Reading the dashboard costs the same with a thousand or a billion
+events stored. The raw table is still kept (for audits and for recomputing aggregates if a bug
+is ever found), but the dashboard never reads it. A test checks this: it runs `EXPLAIN` on every
+snapshot query and fails if a plan touches `events`, `orders` or `dead_letter_events`.
+
+Tables:
+- `agg_minute` — per minute: counts per event type, value of orders placed, revenue (paid).
+- `agg_minute_dimension` — per minute *and* per category / city / payment method. One table for
+  the three breakdowns (with a `dimension` column) keeps the write statement short. Its primary
+  key is `(dimension, bucket, value)` because every read says "this dimension, this time range".
+- `orders` + `order_status_counts` — current status of each order, and a counter per status.
+- `ingest_minute` — per minute of *arrival*: accepted, duplicates, dead letters (for throughput and
+  the dead-letter alert).
+
+Hours are **not** stored separately: they are summed from minute rows when asked (24 hours =
+1,440 tiny rows read through the primary key). A separate hourly table would be one more thing to
+keep in sync for no measurable gain at this size.
+
+### Incremental updates: the aggregates are updated in the same statement as the insert
+The aggregates must never re-scan the events table. Options considered:
+
+| Option | Why not (or why) |
+|---|---|
+| Recompute buckets on a timer (`GROUP BY` over recent events) | Re-scans rows repeatedly; late events outside the rescanned range are missed |
+| Materialized views | `REFRESH` recomputes the whole view every time |
+| Database triggers per row | Runs one upsert per event: slow, and hides logic inside the DB |
+| Background job reading "new rows since id X" | Rows with lower ids can commit *after* higher ids, so a watermark can skip rows — a classic subtle bug |
+| **Update aggregates in the same statement that inserts the batch** ✅ | Exactly-once, always consistent, one round trip |
+
+The writer sends a single SQL statement built from **writable CTEs** (`WITH x AS (INSERT …)`):
+
+1. `inserted`: insert the batch into `events` with `ON CONFLICT DO NOTHING RETURNING …` — this
+   returns only rows that were really new;
+2. `minute_totals`: group those rows by minute and **add** the counts to `agg_minute`
+   (`INSERT … ON CONFLICT (bucket) DO UPDATE SET paid_count = paid_count + excluded.paid_count`);
+3. `dimension_totals`: same for category / city / payment method;
+4. `order_updates` + `status_counts`: update each order's status and adjust the status counters;
+5. `ingest_totals`: add accepted and duplicate counts for the current arrival minute.
+
+Because it is one statement, it is one transaction: either the events *and* all their
+aggregates are stored, or nothing is. Because the aggregates read from step 1's `RETURNING`, a
+retried batch adds nothing. A test generates 500 random orders, shuffles their events, sends
+them in overlapping batches with duplicates, then checks every aggregate row against a
+brute-force `GROUP BY` over the raw events table: they must be identical.
+
+Two PostgreSQL rules that shaped the SQL:
+- An `ON CONFLICT DO UPDATE` may not touch the same row twice in one statement. A batch can hold
+  three events for the same order, or thousands for the same minute, so each upsert input is
+  first reduced to one row per key (`GROUP BY`, or `DISTINCT ON (order_id)`). A dedicated test
+  sends `shipped`, `placed` and `paid` of one order in a single statement.
+- All CTEs see the database as it was when the statement started, so steps cannot read each
+  other's table changes — only each other's `RETURNING` output. That's why every step feeds on
+  `inserted`.
+
+### Late and out-of-order events
+Buckets use **event time** (`occurred_at`), not arrival time. An event that arrives three hours
+late simply adds to the bucket of three hours ago — the upsert does not care which bucket it is.
+
+Order status only moves **forward**: `placed (1) → paid (2) → shipped (3)`, and `cancelled (4)`
+wins over everything. When an order's `paid` event arrives before its `placed` event, the late
+`placed` cannot move it back to "placed". The final status is the same whatever the arrival order.
+
+### Orders per status without counting all orders
+`SELECT status, count(*) FROM orders GROUP BY status` grows with the number of orders. Instead a
+4-row table `order_status_counts` is adjusted by +1 / −1 whenever an order changes status.
+
+To know the *previous* status of each order the statement uses a PostgreSQL 18 feature:
+`RETURNING old.status, new.status` on the `INSERT … ON CONFLICT DO UPDATE`. For a new order
+`old.status` is NULL (so only +1 on the new status). For an order going `placed → paid`: −1 placed,
++1 paid. Before PostgreSQL 18 this would have needed an extra read of the orders first.
+
+This counter is **all-time** (every order ever seen), not a rolling window. A rolling "last 24h"
+version would need expiring old orders; it is listed as a next step.
+
+### Details that matter
+- **Time zone:** `date_trunc('minute', timestamptz)` truncates in the *session* time zone. Every
+  connection sets `timezone=UTC`, so buckets never depend on server configuration. (This matters
+  for hours and days; Morocco's offset is a whole hour, but other zones are not.)
+- **Consistent snapshot:** the ~6 read queries of a snapshot run in one read-only
+  `REPEATABLE READ` transaction, so the KPI cards and the chart can never disagree by one batch.
+- **Zero-filled series:** minutes without events are returned as zeros (`generate_series` +
+  `LEFT JOIN`), so charts get a regular time axis.
+- **Money:** stored as exact `numeric` in PostgreSQL, sent to clients as floats because they are
+  only displayed (JavaScript has no decimal type).
+- **Definitions:** revenue = sum of **paid** amounts; AOV = revenue ÷ paid orders; cancellation
+  rate = cancellations ÷ orders placed in the same window. The last one can in theory exceed 100%
+  if many orders placed before the window are cancelled inside it — acceptable for an alerting
+  signal, and documented.
+- **The one write that can contend:** dead letters are stored by request handlers, not the
+  writer, and both bump the same `ingest_minute` row. Each statement holds that single row lock for
+  a moment and takes no other lock that the other needs, so they can queue but never deadlock.
+
+---
+
+## 5. Problems met and how they were solved
 
 ### The Python virtual environment was very slow to install
 The project folder is on the Windows drive, while Python runs inside WSL (Linux). Creating the

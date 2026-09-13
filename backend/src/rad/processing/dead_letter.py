@@ -41,9 +41,17 @@ def _strip_nul(text: str) -> str:
     return text.replace("\x00", "�").replace("\\u0000", "\\ufffd")
 
 
+# Stores the letters and bumps the per-minute dead-letter counter in the same statement.
 _INSERT_SQL = """
-INSERT INTO dead_letter_events (reason, error_detail, raw_payload)
-SELECT * FROM unnest($1::text[], $2::jsonb[], $3::text[])
+WITH stored AS (
+    INSERT INTO dead_letter_events (reason, error_detail, raw_payload)
+    SELECT * FROM unnest($1::text[], $2::jsonb[], $3::text[])
+    RETURNING 1
+)
+INSERT INTO ingest_minute AS m (bucket, dead_letter_count)
+SELECT date_trunc('minute', now()), count(*) FROM stored
+ON CONFLICT (bucket) DO UPDATE
+    SET dead_letter_count = m.dead_letter_count + excluded.dead_letter_count
 """
 
 
