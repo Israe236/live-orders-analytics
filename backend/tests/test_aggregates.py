@@ -1,6 +1,5 @@
 """The incremental aggregates must always equal a brute-force recomputation from raw events."""
 
-import asyncio
 import json
 import random
 from collections import Counter
@@ -14,7 +13,7 @@ import pytest
 from rad.common.events import Category, City, EventType, OrderEvent, PaymentMethod
 from rad.db.pool import DbPool
 from rad.processing.snapshot import SNAPSHOT_QUERIES, fetch_snapshot
-from rad.processing.writer import BatchWriter
+from tests.helpers import make_event, write_all
 
 STATUS_OF = {
     EventType.ORDER_PLACED: "placed",
@@ -23,31 +22,6 @@ STATUS_OF = {
     EventType.ORDER_CANCELLED: "cancelled",
 }
 RANK = {"placed": 1, "paid": 2, "shipped": 3, "cancelled": 4}
-
-
-def make_event(
-    rng: random.Random,
-    *,
-    order_id: UUID,
-    event_type: EventType,
-    occurred_at: datetime,
-    amount: str | Decimal,
-    category: Category = Category.ELECTRONICS,
-    city: City = City.CASABLANCA,
-    payment: PaymentMethod = PaymentMethod.CARD,
-) -> OrderEvent:
-    return OrderEvent.model_validate(
-        {
-            "event_id": UUID(int=rng.getrandbits(128), version=4),
-            "order_id": order_id,
-            "event_type": event_type,
-            "occurred_at": occurred_at,
-            "amount_mad": amount,
-            "category": category,
-            "city": city,
-            "payment_method": payment,
-        }
-    )
 
 
 def random_lifecycles(rng: random.Random, start: datetime, orders: int) -> list[OrderEvent]:
@@ -80,15 +54,6 @@ def random_lifecycles(rng: random.Random, start: datetime, orders: int) -> list[
             )
             t += timedelta(seconds=rng.uniform(1, 120))
     return events
-
-
-async def write_all(pool: DbPool, submissions: list[list[OrderEvent]], batch_max: int) -> None:
-    writer = BatchWriter(pool, max_queued_events=1_000_000, batch_max_events=batch_max)
-    writer.start()
-    try:
-        await asyncio.gather(*(writer.submit(chunk) for chunk in submissions))
-    finally:
-        await writer.stop()
 
 
 BRUTE_FORCE_MINUTE_SQL = """

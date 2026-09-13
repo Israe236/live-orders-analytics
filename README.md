@@ -15,7 +15,7 @@ and **React Native**.
 - [x] M2 — Processing layer (incremental minute buckets updated in the insert statement, snapshot API)
 - [x] M3 — Event generator (order lifecycles, daily curve, bursts, anomalies, malformed events)
 - [x] M4 — WebSocket layer (1 Hz fan-out, conflation, slow-client eviction, periodic resync)
-- [ ] M5 — Alerting
+- [x] M5 — Alerting (4 threshold rules, anti-flapping state machine, pushed live and stored)
 - [ ] M6 — Shared client core
 - [ ] M7 — React dashboard
 - [ ] M8 — Angular dashboard

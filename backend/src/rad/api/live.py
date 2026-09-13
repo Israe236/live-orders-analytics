@@ -9,10 +9,14 @@ Per client:
   arrives before the previous was sent, the old one is replaced: a slow client simply skips
   intermediate states and always receives the latest.
 * **The feed is lossy.** Recent-event messages go to a small queue that drops its oldest items.
+* **Alerts are never dropped.** They have their own queue; a client so far behind that it
+  cannot take them is disconnected (it gets the active alerts again when it reconnects).
 * **Stuck clients are evicted.** If one socket write takes longer than ``send_timeout_s`` the
   client is closed with code 1013 ("try again later") and removed.
 
 Memory per client is therefore bounded, whatever the client does.
+
+The same tick also evaluates the alert rules (see ``rad.alerts``).
 """
 
 import asyncio
@@ -21,14 +25,17 @@ import logging
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from fastapi import WebSocket
 
+from rad.alerts.rules import Alert, AlertEngine, evaluate_rules
+from rad.alerts.store import AlertOut, fetch_window_stats, save_alert
 from rad.common.config import Settings
 from rad.common.events import OrderEvent
 from rad.common.live import (
+    AlertMessage,
     EventsMessage,
     FeedEvent,
     LiveUpdate,
@@ -63,12 +70,16 @@ class ClientConnection:
         send_timeout_s: float,
         on_closed: Callable[[ClientConnection], None],
         feed_queue_size: int = 20,
+        max_pending_alerts: int = 50,
     ) -> None:
         self._sink = sink
         self._send_timeout_s = send_timeout_s
         self._on_closed = on_closed
         self._state: str | None = None
         self._feed: deque[str] = deque(maxlen=feed_queue_size)
+        self._alerts: deque[str] = deque()
+        self._max_pending_alerts = max_pending_alerts
+        self._alerts_overflowed = False
         self._wakeup = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self.closed = False
@@ -95,11 +106,24 @@ class ClientConnection:
         self._feed.append(message)
         self._wakeup.set()
 
+    def push_alert(self, message: str) -> None:
+        if self.closed:
+            return
+        if len(self._alerts) >= self._max_pending_alerts:
+            self._alerts_overflowed = True  # the sender task closes the connection
+        else:
+            self._alerts.append(message)
+        self._wakeup.set()
+
     async def _send_loop(self) -> None:
         try:
             while True:
                 await self._wakeup.wait()
                 self._wakeup.clear()
+                if self._alerts_overflowed:
+                    log.warning("closing a WebSocket client that cannot keep up with alerts")
+                    await self._close_sink(CLOSE_TRY_AGAIN_LATER, "client too slow")
+                    return
                 while (message := self._next_message()) is not None:
                     async with asyncio.timeout(self._send_timeout_s):
                         await self._sink.send_text(message)
@@ -115,7 +139,9 @@ class ClientConnection:
             self._mark_closed()
 
     def _next_message(self) -> str | None:
-        # State first: it is the most important message, and the feed can wait a moment.
+        # Most important first: alerts, then the latest state, then the feed.
+        if self._alerts:
+            return self._alerts.popleft()
         if self._state is not None:
             message, self._state = self._state, None
             return message
@@ -157,12 +183,22 @@ class LiveHub:
         self._seq = 0
         self._latest_snapshot: str | None = None
         self._task: asyncio.Task[None] | None = None
+        self._thresholds = settings.alert_thresholds()
+        self._alerts = AlertEngine(
+            fire_after=timedelta(seconds=settings.alert_fire_after_s),
+            resolve_after=timedelta(seconds=settings.alert_resolve_after_s),
+        )
+        self._started_at = datetime.now(UTC)
         self.tick_errors = 0
         self.rejected_clients = 0
 
     @property
     def client_count(self) -> int:
         return len(self._clients)
+
+    @property
+    def active_alerts(self) -> list[Alert]:
+        return self._alerts.active_alerts
 
     # --- writer side -----------------------------------------------------------------------
 
@@ -201,6 +237,11 @@ class LiveHub:
             except Exception:
                 self.tick_errors += 1
                 log.exception("live hub tick failed")
+            try:
+                await self._evaluate_alerts()
+            except Exception:
+                self.tick_errors += 1
+                log.exception("alert evaluation failed")
             tick += 1
             await asyncio.sleep(
                 max(0.0, self._settings.ws_tick_interval_s - (loop.time() - started))
@@ -231,6 +272,26 @@ class LiveHub:
             if feed is not None:
                 client.push_feed(feed)
 
+    async def _evaluate_alerts(self) -> None:
+        now = datetime.now(UTC)
+        stats = await fetch_window_stats(
+            self._pool,
+            now=now,
+            window_minutes=self._thresholds.window_minutes,
+            last_commit_at=self._last_commit_datetime(),
+        )
+        results = evaluate_rules(stats, self._thresholds, started_at=self._started_at)
+        for alert in self._alerts.update(results, now):
+            # Store before pushing, so GET /alerts never disagrees with what clients were told.
+            await save_alert(self._pool, alert)
+            log.warning("alert %s %s: %s", alert.status, alert.rule, alert.message)
+            message = self._alert_message(alert)
+            for client in list(self._clients):
+                client.push_alert(message)
+
+    def _alert_message(self, alert: Alert) -> str:
+        return AlertMessage(seq=self._seq, alert=AlertOut.from_alert(alert)).model_dump_json()
+
     async def _snapshot_message(self) -> str:
         snapshot = await fetch_snapshot(self._pool)
         self._seq += 1
@@ -242,6 +303,11 @@ class LiveHub:
         ).model_dump_json()
         self._latest_snapshot = message
         return message
+
+    def _last_commit_datetime(self) -> datetime | None:
+        if self._last_commit_at is None:
+            return None
+        return datetime.fromtimestamp(self._last_commit_at, UTC)
 
     def _pipeline_stats(self) -> PipelineStats:
         now = time.monotonic()
@@ -255,9 +321,7 @@ class LiveHub:
         return PipelineStats(
             events_per_second=round((total - first_total) / elapsed, 1) if elapsed > 0 else 0.0,
             last_event_occurred_at=self._last_event_occurred_at,
-            last_commit_at=(
-                datetime.fromtimestamp(self._last_commit_at, UTC) if self._last_commit_at else None
-            ),
+            last_commit_at=self._last_commit_datetime(),
             connected_clients=len(self._clients),
         )
 
@@ -274,6 +338,9 @@ class LiveHub:
         # (at most one tick old) so a reconnect storm does not become a database query storm.
         first = self._latest_snapshot or await self._snapshot_message()
         await websocket.send_text(first)
+        # Then whatever is currently firing: a client that connects mid-incident must see it.
+        for alert in self._alerts.active_alerts:
+            await websocket.send_text(self._alert_message(alert))
 
         client = ClientConnection(
             websocket,

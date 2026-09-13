@@ -416,7 +416,89 @@ PostgreSQL `LISTEN/NOTIFY`, so every process hears about every commit.
 
 ---
 
-## 8. Problems met and how they were solved
+## 8. Alerting
+
+### The rules
+| Rule | Fires when (default) | Guard against noise | Severity |
+|---|---|---|---|
+| `cancellation_rate` | cancellations ÷ orders placed in the last 3 min **> 15%** | at least 30 orders in the window | warning |
+| `revenue_drop` | revenue per minute in the last 3 min is **more than 50% below** the 3 min before | previous window ≥ 5,000 MAD/min | critical |
+| `dead_letter_ratio` | rejected ÷ (accepted + rejected) in the last 3 min **> 5%** | at least 100 events in the window | warning |
+| `pipeline_stalled` | no event stored for **30 s** | — | critical |
+
+Every threshold is an environment variable (`RAD_ALERT_*`).
+
+The "minimum volume" guards matter: at 3 a.m., 4 orders with 1 cancellation is a 25% cancellation
+rate that means nothing. Below the floor a rule simply reports "not enough data".
+
+### Rules are pure functions
+A rule takes numbers (window totals) and returns "breached or not, value, message". It does not
+query the database or read the clock. Each rule's boundaries (exactly at the threshold, just
+above, below the volume floor) are unit-tested with plain values. A small store module reads the
+window totals from the **aggregate tables** (two tiny queries per second, never the raw events).
+
+### Comparing a partial window fairly
+The current window ends *now*, so its last minute is only partly filled. Comparing raw totals would
+make revenue look lower at the start of every minute and cause false "drops". The revenue rule
+compares **rates** (MAD per minute) using the real elapsed seconds of each window. A test checks
+that half a window with half the revenue counts as "no drop".
+
+### Choosing the window: why 3 minutes (a tuning story)
+The first design used 5-minute windows. Working through the numbers against the generator's
+anomalies showed two problems:
+- **Missed incidents.** A 2-minute traffic drop to 25% only lowers a 5-minute window's revenue to
+  (3 × 100% + 2 × 25%) ÷ 5 = 70%, a 30% drop. The 50% rule would never fire. A shorter window
+  reacts faster: with 3 minutes, a sustained drop crosses 50% about two minutes in.
+- **False alarms from flash sales.** A 30-second burst at 4× traffic inflates the *previous* window.
+  When traffic returns to normal it looks like a drop. With a 3-minute window the burst raises the
+  baseline by about 50%, so normal traffic looks like a ~33% drop, still below the 50% threshold.
+
+Order amounts have a heavy tail (a few very expensive electronics orders), so revenue over a short
+window is noisy. That's why the threshold is a large 50%, and why an alert must hold for 10
+seconds before firing (next section). The generator's anomalies last **4 minutes**, longer than the
+window, so they're actually visible to the rules. A trade-off: shorter windows detect faster but
+get noisier.
+
+### No flapping: hysteresis in time
+A value hovering around its threshold would fire and resolve every few seconds, and people stop
+reading alerts that do that. The alert engine is a small state machine:
+- an alert **fires** only after its rule has been breached **continuously for 10 s**;
+- it **resolves** only after the rule has been healthy **continuously for 30 s**;
+- a single healthy second during an incident resets the "healthy for" timer, and vice versa.
+
+Unit tests feed one result per second: breached for 9 s → nothing; 10 s → fires once; a pattern
+of 8 s breached / 1 s healthy repeated → never fires; healthy 29 s → still firing; 30 s → resolved.
+
+The engine returns only **transitions** (newly firing, newly resolved). Each change is therefore
+stored and pushed exactly once, not re-sent every second.
+
+### Delivery
+- Each transition is **saved to the `alerts` table first, then pushed** over the WebSocket. A client
+  that reacts to the push by calling `GET /alerts` always finds it.
+- Alerts have their **own per-client queue that is never trimmed**, unlike the lossy feed. If a
+  client falls so far behind that 50 alerts are waiting, it is disconnected instead. When it
+  reconnects it receives the snapshot and then every **currently firing** alert. An integration test
+  checks this with a client that connects in the middle of an incident.
+- The dashboards load the recent alert history once over REST (`GET /alerts`), then apply live
+  changes. If a stale "firing" copy from REST arrives after the live "resolved" message, the client
+  keeps the resolution (alerts only move firing → resolved).
+
+### Restarts
+The engine's state lives in memory. After a restart it cannot resolve alerts that the previous
+process fired, so on startup the API marks any alert still `firing` in the table as resolved. If
+the problem is still there, the new engine fires a fresh alert within seconds. The alternative,
+rebuilding engine state from the table, would be more code for little benefit.
+
+### Limitations
+- Evaluation happens in the API process, once per second. If the database is down, rules cannot be
+  evaluated. `pipeline_stalled` then can't fire either, which is exactly when you'd want it. A
+  production system would add an external health check (e.g. an uptime monitor on `/health`).
+- Thresholds are static. Comparing with the same hour last week would handle daily seasonality
+  better; listed as a next step.
+
+---
+
+## 9. Problems met and how they were solved
 
 ### The Python virtual environment was very slow to install
 The project folder is on the Windows drive, while Python runs inside WSL (Linux). Creating the

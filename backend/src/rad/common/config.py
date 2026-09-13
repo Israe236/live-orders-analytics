@@ -4,6 +4,8 @@ from datetime import timedelta
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from rad.alerts.rules import Thresholds
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RAD_", extra="ignore")
@@ -36,6 +38,31 @@ class Settings(BaseSettings):
     # A client that cannot accept one message within this time is disconnected.
     ws_send_timeout_s: float = 5.0
     ws_feed_max_events: int = 20
+
+    # --- Alerting ---------------------------------------------------------------------------
+    alert_window_minutes: int = 3
+    alert_cancellation_rate: float = 0.15
+    alert_cancellation_min_orders: int = 30
+    alert_revenue_drop_ratio: float = 0.5
+    alert_revenue_min_baseline_mad_per_min: float = 5_000.0
+    alert_dead_letter_ratio: float = 0.05
+    alert_dead_letter_min_events: int = 100
+    alert_stall_after_s: float = 30.0
+    # Hysteresis in time: breached this long before firing, healthy this long before resolving.
+    alert_fire_after_s: float = 10.0
+    alert_resolve_after_s: float = 30.0
+
+    def alert_thresholds(self) -> Thresholds:
+        return Thresholds(
+            window_minutes=self.alert_window_minutes,
+            cancellation_rate=self.alert_cancellation_rate,
+            cancellation_min_orders=self.alert_cancellation_min_orders,
+            revenue_drop_ratio=self.alert_revenue_drop_ratio,
+            revenue_min_baseline_mad_per_min=self.alert_revenue_min_baseline_mad_per_min,
+            dead_letter_ratio=self.alert_dead_letter_ratio,
+            dead_letter_min_events=self.alert_dead_letter_min_events,
+            stall_after_s=self.alert_stall_after_s,
+        )
 
     @property
     def max_future_skew(self) -> timedelta:

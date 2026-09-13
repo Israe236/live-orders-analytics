@@ -6,11 +6,13 @@ Run with: ``uvicorn rad.api.app:create_app --factory``
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 
 from rad import __version__
-from rad.api import routes_health, routes_ingest, routes_live, routes_metrics
+from rad.alerts.store import resolve_stale_alerts
+from rad.api import routes_alerts, routes_health, routes_ingest, routes_live, routes_metrics
 from rad.api.live import LiveHub
 from rad.api.services import Services
 from rad.common.config import Settings
@@ -33,6 +35,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         try:
             await apply_migrations(pool)
+            closed = await resolve_stale_alerts(pool, now=datetime.now(UTC))
+            if closed:
+                log.info("resolved %d alerts left firing by a previous run", closed)
             writer = BatchWriter(
                 pool,
                 max_queued_events=settings.ingest_queue_max_events,
@@ -57,4 +62,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes_ingest.router)
     app.include_router(routes_metrics.router)
     app.include_router(routes_live.router)
+    app.include_router(routes_alerts.router)
     return app

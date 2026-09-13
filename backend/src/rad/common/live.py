@@ -16,6 +16,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from rad.alerts.store import AlertOut
 from rad.common.events import OrderEvent
 from rad.common.metrics import Breakdown, IngestStats, Kpis, MetricsSnapshot, TimePoint
 
@@ -102,3 +103,11 @@ class EventsMessage(BaseModel):
     type: Literal["events"] = "events"
     seq: int
     items: list[FeedEvent]  # newest first
+
+
+class AlertMessage(BaseModel):
+    """An alert started firing or was resolved (sent once per transition)."""
+
+    type: Literal["alert"] = "alert"
+    seq: int
+    alert: AlertOut

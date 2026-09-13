@@ -2,19 +2,17 @@
 
 import asyncio
 import json
-from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
-from websockets.asyncio.client import ClientConnection as WsClient
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from rad.api.live import CLOSE_TRY_AGAIN_LATER, ClientConnection
 from tests.conftest import LiveServer, ServerFactory
-from tests.helpers import event_payload
+from tests.helpers import event_payload, receive_until, ws_url
 
 # --- fakes for unit tests ------------------------------------------------------------------
 
@@ -101,27 +99,13 @@ async def test_stuck_client_is_evicted_without_delaying_others() -> None:
 # --- integration: real server, real WebSocket clients ----------------------------------------
 
 
-async def receive_until(
-    ws: WsClient, predicate: Callable[[dict[str, Any]], bool], within_s: float = 5.0
-) -> dict[str, Any]:
-    async with asyncio.timeout(within_s):
-        while True:
-            message: dict[str, Any] = json.loads(await ws.recv())
-            if predicate(message):
-                return message
-
-
-def ws_url(server: LiveServer) -> str:
-    return f"{server.ws_base_url}/ws/live"
-
-
 @pytest.fixture
 async def fast_server(start_server: ServerFactory) -> LiveServer:
     return await start_server(ws_tick_interval_s=0.1, ws_full_snapshot_every_ticks=5)
 
 
 async def test_every_client_gets_a_snapshot_then_live_updates(fast_server: LiveServer) -> None:
-    clients = [await connect(ws_url(fast_server)) for _ in range(5)]
+    clients = [await connect(ws_url(fast_server.base_url)) for _ in range(5)]
     try:
         for ws in clients:
             first = json.loads(await ws.recv())
@@ -147,7 +131,7 @@ async def test_every_client_gets_a_snapshot_then_live_updates(fast_server: LiveS
 
 
 async def test_feed_and_freshness_follow_new_events(fast_server: LiveServer) -> None:
-    async with connect(ws_url(fast_server)) as ws:
+    async with connect(ws_url(fast_server.base_url)) as ws:
         await ws.recv()  # snapshot
         occurred_at = datetime.now(UTC)
         events = [event_payload(occurred_at=occurred_at.isoformat()) for _ in range(3)]
@@ -172,7 +156,7 @@ async def test_feed_and_freshness_follow_new_events(fast_server: LiveServer) -> 
 
 
 async def test_disconnected_clients_are_removed(fast_server: LiveServer) -> None:
-    clients = [await connect(ws_url(fast_server)) for _ in range(3)]
+    clients = [await connect(ws_url(fast_server.base_url)) for _ in range(3)]
     for ws in clients:
         await ws.recv()
     await clients[0].close()
@@ -190,9 +174,9 @@ async def test_disconnected_clients_are_removed(fast_server: LiveServer) -> None
 
 async def test_clients_over_capacity_are_told_to_retry_later(start_server: ServerFactory) -> None:
     server = await start_server(ws_max_clients=1, ws_tick_interval_s=0.1)
-    async with connect(ws_url(server)) as first:
+    async with connect(ws_url(server.base_url)) as first:
         await first.recv()
-        async with connect(ws_url(server)) as second:
+        async with connect(ws_url(server.base_url)) as second:
             with pytest.raises(ConnectionClosed) as exc_info:
                 await second.recv()
             assert exc_info.value.rcvd is not None

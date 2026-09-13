@@ -51,6 +51,8 @@ services:
       RAD_GEN_INVALID_RATIO: ${GEN_INVALID_RATIO:-0.01}
       RAD_GEN_BURSTS_PER_HOUR: ${GEN_BURSTS_PER_HOUR:-4}
       RAD_GEN_ANOMALIES_PER_HOUR: ${GEN_ANOMALIES_PER_HOUR:-2}
+      # Longer than the 3-minute alert window, so an anomaly is visible to the alert rules.
+      RAD_GEN_ANOMALY_DURATION_S: ${GEN_ANOMALY_DURATION_S:-240}
     depends_on:
       api:
         condition: service_healthy
