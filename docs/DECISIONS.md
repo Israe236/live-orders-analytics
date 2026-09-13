@@ -249,7 +249,86 @@ version would need expiring old orders; it is listed as a next step.
 
 ---
 
-## 5. Problems met and how they were solved
+## 5. Event generator
+
+### What it simulates
+Each **order** has fixed attributes (amount, category, city, payment method) and produces a small
+**lifecycle** of events over the next seconds or minutes:
+
+```
+placed ──► paid ──► shipped
+   │         │
+   └────────►└──► cancelled
+```
+
+- Cities, categories and payment methods are drawn with realistic weights (Casablanca has the
+  most orders; cash on delivery is the most common payment method, as in Moroccan e-commerce).
+- Amounts follow a log-normal distribution per category (many cheap books, a few very expensive
+  electronics), which looks like real basket values.
+- Cash-on-delivery orders are cancelled much more often than card orders.
+
+### How the rate is controlled
+New orders arrive as a **Poisson process**: the gap before the next order is random
+(exponentially distributed), like real independent customers. Since each order produces about
+2.9 events on average, the order rate is `target events/s ÷ 2.9`, which makes the total event
+rate match the setting. A test runs 10 simulated minutes at 50 events/s and checks the measured
+rate is within 10%.
+
+On top of the base rate:
+- **Daily curve** — quiet at night (≈0.2×), a lunch bump, an evening peak (≈2.2×), with a daily
+  average of exactly 1×, in Casablanca time. `GEN_TIME_COMPRESSION=1440` squeezes a day into one
+  real minute to show the curve in a demo.
+- **Bursts** (flash sales) — a few times per hour, traffic is multiplied by 4 for 30 seconds.
+- **Anomalies** — about twice per hour, for 2 minutes, either a **payment outage** (card payments
+  fail, so those orders become cancellations: the cancellation-rate alert should fire) or a
+  **traffic drop** (traffic ÷ 4: the revenue-drop alert should fire).
+- **Malformed events** — about 1% extra events are deliberately broken (unknown city, negative
+  amount, missing field, bad date…) to exercise the dead-letter path continuously.
+
+### Why a pure simulator + a separate runner
+The simulator has no clock and no network: you give it a time, it returns the events that
+happened up to that time. The runner calls it every 250 ms with the real clock and sends the
+result. This split means tests can simulate ten minutes of traffic in a fraction of a second,
+with a fixed random seed that always produces exactly the same stream.
+
+Event ids are **UUIDv7** built from the event's own timestamp plus seeded random bits, so they
+are both reproducible and time-ordered (good for the database index, see Ingestion).
+
+### A well-behaved producer
+- **Waits** for `GET /health` before sending anything (the API may still be starting).
+- **Retries** on `429`, `502/503/504` and network errors with **exponential backoff and full
+  jitter**: attempt *n* waits a random time between 0 and `min(10 s, 0.25 s × 2ⁿ)`, and at least
+  the server's `Retry-After`. The randomness matters: if 50 producers all fail at the same moment
+  and all retry exactly 1 s later, they hit the recovering server at the same moment again
+  ("thundering herd"). Retrying is safe because the API ignores duplicate `event_id`s.
+- **Does not retry** other errors (e.g. `413 too large`): sending the same bytes again cannot work.
+- **Bounds its own buffer**: if the API is down for a long time, new batches are dropped and
+  counted instead of filling memory until the process crashes.
+
+---
+
+## 6. Packaging and running
+
+### One image for the API and the generator
+Both run from the same Docker image with a different command. They share the code (the event
+schema), so building it once avoids two images drifting apart.
+
+The Dockerfile installs dependencies **before** copying the source code. Docker caches each step,
+so changing a line of Python rebuilds only the last layer in a second instead of reinstalling
+every package. The container runs as a non-root user. The health check uses Python (the slim
+image has no `curl`), and compose starts the generator only once the API reports healthy, and
+the API only once PostgreSQL is healthy.
+
+The API runs as **one** process. The WebSocket broadcaster (next milestone) keeps its client
+list in memory, so several API processes would each only know their own clients. How to scale
+past one process is listed in the README's limitations.
+
+Uvicorn's access log is turned off: at several ingestion requests per second it's noise, and
+formatting and writing each line costs CPU on the hot path. Errors are still logged.
+
+---
+
+## 7. Problems met and how they were solved
 
 ### The Python virtual environment was very slow to install
 The project folder is on the Windows drive, while Python runs inside WSL (Linux). Creating the
@@ -257,3 +336,15 @@ The project folder is on the Windows drive, while Python runs inside WSL (Linux)
 boundary: installing 14 packages took **2 minutes**. Fix: keep the project where it is but put
 the environment on the Linux filesystem with `UV_PROJECT_ENVIRONMENT=$HOME/.venvs/rad`.
 The same sync then took about a second.
+
+### Tests failed with "connection refused"
+After a restart of the machine, the whole DB test suite errored with `ConnectionRefusedError` on
+port 5432. Nothing was wrong with the code: Docker Desktop was not running, so neither was
+PostgreSQL. Starting it fixed it. Lesson: when *every* database test fails at once in fixture
+setup, check the infrastructure before the code.
+
+### Logs drowned in noise
+The first `docker compose up` printed a line for every HTTP request from both the generator
+(httpx logs at INFO level) and the API (uvicorn access log) — several per second — hiding the
+generator's useful statistics line. httpx is now set to WARNING in the generator and the API runs
+with `--no-access-log`.

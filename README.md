@@ -13,7 +13,7 @@ and **React Native**.
 - [x] M0 — Repo skeleton
 - [x] M1 — Ingestion API (validation, dead letters, group-commit writer, 429 backpressure)
 - [x] M2 — Processing layer (incremental minute buckets updated in the insert statement, snapshot API)
-- [ ] M3 — Event generator
+- [x] M3 — Event generator (order lifecycles, daily curve, bursts, anomalies, malformed events)
 - [ ] M4 — WebSocket layer
 - [ ] M5 — Alerting
 - [ ] M6 — Shared client core
@@ -23,9 +23,20 @@ and **React Native**.
 - [ ] M10 — CI
 - [ ] M11 — Benchmark & final README
 
-## Development (so far)
+## Run it (so far)
 
 ```bash
-docker compose up -d postgres          # PostgreSQL 18 on localhost:5432
-cd backend && uv sync && uv run pytest # backend tests
+docker compose up --build                     # postgres + api + generator
+curl http://localhost:8000/metrics/snapshot   # live KPIs, series, breakdowns
+```
+
+The generator is tuned with environment variables (see [.env.example](.env.example)), e.g.
+`GEN_EVENTS_PER_SECOND=100 GEN_TIME_COMPRESSION=1440 docker compose up`.
+
+## Development
+
+```bash
+docker compose up -d postgres            # tests use a rad_test database on localhost:5432
+cd backend && uv sync
+uv run ruff check . && uv run mypy && uv run pytest
 ```
