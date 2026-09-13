@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     # Upper bound on events written in a single SQL statement.
     writer_batch_max_events: int = 5_000
 
+    # --- Live push (WebSocket) --------------------------------------------------------------
+    ws_tick_interval_s: float = 1.0
+    # Updates carry only the tail of the time series; a full snapshot every N ticks corrects
+    # older buckets changed by late events.
+    ws_full_snapshot_every_ticks: int = 30
+    ws_max_clients: int = 500
+    # A client that cannot accept one message within this time is disconnected.
+    ws_send_timeout_s: float = 5.0
+    ws_feed_max_events: int = 20
+
     @property
     def max_future_skew(self) -> timedelta:
         return timedelta(seconds=self.max_future_skew_seconds)

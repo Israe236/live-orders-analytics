@@ -24,5 +24,6 @@ async def health(services: ServicesDep) -> JSONResponse:
         "database": database_ok,
         "queued_events": services.writer.queued_events,
         "writer": asdict(services.writer.stats),
+        "live_clients": services.hub.client_count,
     }
     return JSONResponse(body, status_code=200 if database_ok else 503)

@@ -10,7 +10,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from rad import __version__
-from rad.api import routes_health, routes_ingest, routes_metrics
+from rad.api import routes_health, routes_ingest, routes_live, routes_metrics
+from rad.api.live import LiveHub
 from rad.api.services import Services
 from rad.common.config import Settings
 from rad.db.migrate import apply_migrations
@@ -37,11 +38,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 max_queued_events=settings.ingest_queue_max_events,
                 batch_max_events=settings.writer_batch_max_events,
             )
+            hub = LiveHub(pool, writer, settings)
+            writer.add_listener(hub.on_commit)
             writer.start()
-            app.state.services = Services(settings=settings, pool=pool, writer=writer)
+            hub.start()
+            app.state.services = Services(settings=settings, pool=pool, writer=writer, hub=hub)
             try:
                 yield
             finally:
+                # Stop pushing first, then drain the write queue, then close the pool.
+                await hub.stop()
                 await writer.stop()
         finally:
             await pool.close()
@@ -50,4 +56,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes_health.router)
     app.include_router(routes_ingest.router)
     app.include_router(routes_metrics.router)
+    app.include_router(routes_live.router)
     return app

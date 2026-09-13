@@ -14,7 +14,7 @@ and **React Native**.
 - [x] M1 — Ingestion API (validation, dead letters, group-commit writer, 429 backpressure)
 - [x] M2 — Processing layer (incremental minute buckets updated in the insert statement, snapshot API)
 - [x] M3 — Event generator (order lifecycles, daily curve, bursts, anomalies, malformed events)
-- [ ] M4 — WebSocket layer
+- [x] M4 — WebSocket layer (1 Hz fan-out, conflation, slow-client eviction, periodic resync)
 - [ ] M5 — Alerting
 - [ ] M6 — Shared client core
 - [ ] M7 — React dashboard

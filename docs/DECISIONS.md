@@ -328,7 +328,95 @@ formatting and writing each line costs CPU on the hot path. Errors are still log
 
 ---
 
-## 7. Problems met and how they were solved
+## 7. Live push: the WebSocket layer
+
+### Why WebSockets instead of polling
+With **polling**, each browser asks `GET /metrics/snapshot` every second. Every client triggers
+its own set of database queries, so 200 open dashboards = 200 snapshot builds per second, most of
+them returning the same data. Updates also arrive up to one polling interval late.
+
+With a **WebSocket**, the connection stays open and the server pushes. The server builds the
+state **once per second whatever the number of clients**, serializes it **once**, and sends that
+same string to everyone. Database load is constant; adding a client only adds a socket write.
+
+Server-Sent Events (SSE) would also work, since data flows one way. WebSockets were chosen
+because they are the stated requirement, and because the same connection can later carry
+messages from the client (e.g. subscribing to one city) without a second channel.
+
+### Push once per second, not on every commit
+The writer commits several times per second under load. Pushing after each commit would send
+more updates than a human can see and would multiply work. The hub **ticks at 1 Hz**: it reads
+the aggregate tables once and pushes the result. Everything that happened during that second is
+coalesced into one message.
+
+An update is sent every tick even when nothing changed. It doubles as a **heartbeat**: a client
+that hears nothing for a few seconds knows the connection is dead, even when TCP hasn't noticed.
+
+### Message design: snapshot, small updates, periodic resync
+| Type | When | Content |
+|---|---|---|
+| `snapshot` | on connect, then every 30 ticks | the full state, including 60 minute points and 24 hour points |
+| `update` | every other tick | KPIs, breakdowns and statuses, but only the **last 3 minute points and the last hour point** |
+| `events` | when new events were stored | up to 20 newest events, for the live feed |
+
+Only the newest time buckets change from second to second, so resending 84 chart points every
+second would be waste. The client replaces or adds the points it receives, matched by bucket
+time. A **late event** can change an older bucket that no update carries, so a full snapshot every
+30 seconds corrects any drift. Every message has a `seq` number that increases each tick.
+
+### Backpressure: slow clients never slow down the others
+A client on a bad mobile connection may read slowly. If the server waited for each socket before
+moving on, one slow client would delay everyone; if it queued every message per client, memory
+would grow without limit. The hub does neither:
+
+1. **Hand-over never waits.** Each tick, the hub gives the message to every client object
+   synchronously. Each client has its **own sender task** that does the actual network write.
+2. **State is conflated.** Each client keeps at most **one** pending state message. If a newer one
+   arrives before the old one was sent, the old one is simply replaced. A slow client skips
+   intermediate states and always gets the latest, which is all a dashboard needs.
+3. **The feed is lossy.** Feed messages go into a small queue (20) that drops the oldest.
+4. **Stuck clients are evicted.** If a single write takes more than 5 seconds, the client is
+   closed with WebSocket code **1013 "try again later"** and removed.
+
+Memory per client is bounded (one state + 20 feed messages), whatever the client does. Unit tests
+use a fake socket that blocks on purpose: they check that the blocked client receives only the
+first and the latest state, that the feed drops the oldest items, and that a healthy client keeps
+receiving every tick while the stuck one is evicted.
+
+### Reconnection storms and capacity
+When the API restarts, every client reconnects at nearly the same time. Two protections:
+- The first `snapshot` a new client receives is the one **already built by the last tick** (at
+  most one second old), not a new database query per connection.
+- Above `ws_max_clients` (500 by default), new connections are accepted and immediately closed
+  with **1013**, telling well-behaved clients to back off and retry.
+
+Spreading those retries out is the client's job: exponential backoff with random jitter (see the
+shared TypeScript client).
+
+### Noticing disconnects
+The server never expects messages from the client, but it keeps **reading** the socket: reading
+is how a closed connection is detected. When the read loop ends, the client's sender task is
+cancelled and it is removed from the hub. A test opens three clients, closes two, and checks that
+`/health` reports one.
+
+### Freshness and throughput in every message
+Each message carries a `pipeline` block:
+- `last_event_occurred_at`: the newest event time among committed events. The dashboard can show
+  "data is 0.8 s old", and the benchmark uses it to measure end-to-end latency.
+- `events_per_second`: committed events per second over the last ~5 seconds, measured in memory
+  from the writer's counter. The per-minute table average reacts too slowly right after start-up.
+- `connected_clients`.
+
+### Limitation: one API process
+The hub keeps its client list in memory. With several API processes behind a load balancer, each
+process would only push to its own clients. That's still correct here, because every process
+reads the same aggregate tables. What would break is the live feed and the freshness watermark,
+which come from the process's own writer. The planned fix without new infrastructure is
+PostgreSQL `LISTEN/NOTIFY`, so every process hears about every commit.
+
+---
+
+## 8. Problems met and how they were solved
 
 ### The Python virtual environment was very slow to install
 The project folder is on the Windows drive, while Python runs inside WSL (Linux). Creating the
