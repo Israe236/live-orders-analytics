@@ -3,7 +3,7 @@
 A real-time analytics pipeline for e-commerce order events (amounts in MAD, Moroccan cities),
 from synthetic event generation to live dashboards in **React**, **Angular** and **React Native**.
 
-<!-- CI badge: added after the repository is published on GitHub. -->
+[![CI](https://github.com/Israe236/live-orders-analytics/actions/workflows/ci.yml/badge.svg)](https://github.com/Israe236/live-orders-analytics/actions/workflows/ci.yml)
 
 ## Problem
 
@@ -85,7 +85,20 @@ into one real minute. The mobile app runs outside Docker with Expo Go; see
 
 ## Screenshots
 
-<!-- Pending: captured from the running stack. -->
+Captured with Playwright ([script](frontends/scripts/capture-screenshots.mjs)) from a fresh stack.
+The generator backfilled an hour of history, then a payment outage was triggered
+(`GEN_FORCE_ANOMALY=payment_outage`). The cancellation-rate alert in the banner was raised by the
+real alert engine; nothing is staged in the UI.
+
+**React** (Recharts, React Query)
+
+![React dashboard with a firing cancellation-rate alert](docs/images/react-dashboard.png)
+
+**Angular** (signals, ECharts), same backend and same live data
+
+![Angular dashboard with a firing cancellation-rate alert](docs/images/angular-dashboard.png)
+
+The React Native app is not pictured because it has not been run on a device yet (see Limitations).
 
 ## Performance (measured)
 
