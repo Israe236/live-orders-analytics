@@ -3,6 +3,9 @@ import { memo } from "react";
 
 import { useRenderTrace } from "../renderTrace";
 
+/** The history table shows the most recent alerts only (firing ones are always listed first). */
+const HISTORY_ROWS = 8;
+
 function time(iso: string | null): string {
   return iso === null ? "—" : new Date(iso).toLocaleTimeString([], { hour12: false });
 }
@@ -45,7 +48,7 @@ export const AlertHistory = memo(function AlertHistory({ alerts }: { alerts: Ale
             </tr>
           </thead>
           <tbody>
-            {alerts.map((alert) => (
+            {alerts.slice(0, HISTORY_ROWS).map((alert) => (
               <tr key={alert.id}>
                 <td>
                   <span className={`chip chip-alert-${alert.status}`}>{alert.status}</span>

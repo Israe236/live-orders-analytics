@@ -21,11 +21,9 @@ export function describeConnection(connection: ConnectionState, now: number = Da
   }
 }
 
-const madFormatter = new Intl.NumberFormat("fr-MA", {
-  style: "currency",
-  currency: "MAD",
-  maximumFractionDigits: 0,
-});
+// One digit-grouping style everywhere ("1,234,567 MAD"), matching the order counts shown next
+// to amounts. A locale currency format mixed "730.800.006 MAD" with "301,139" on one screen.
+const amountFormatter = new Intl.NumberFormat("en", { maximumFractionDigits: 0 });
 
 const compactFormatter = new Intl.NumberFormat("en", {
   notation: "compact",
@@ -34,9 +32,9 @@ const compactFormatter = new Intl.NumberFormat("en", {
 
 const integerFormatter = new Intl.NumberFormat("en");
 
-/** "12 345 MAD" style amount, no decimals (dashboard figures, not invoices). */
+/** "12,345 MAD": no decimals (dashboard figures, not invoices). */
 export function formatMad(value: number): string {
-  return madFormatter.format(value);
+  return `${amountFormatter.format(value)} MAD`;
 }
 
 /** 1234567 → "1.2M" (chart axes). */

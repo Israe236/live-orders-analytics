@@ -49,7 +49,7 @@ export class AlertBannerComponent {
           </tr>
         </thead>
         <tbody>
-          @for (alert of alerts(); track alert.id) {
+          @for (alert of recent(); track alert.id) {
             <tr>
               <td><span [class]="'chip chip-alert-' + alert.status">{{ alert.status }}</span></td>
               <td>{{ alert.rule.replaceAll('_', ' ') }}</td>
@@ -66,5 +66,7 @@ export class AlertBannerComponent {
 export class AlertHistoryComponent {
   readonly alerts = input.required<Alert[]>();
   protected readonly firing = computed(() => this.alerts().filter((a) => a.status === 'firing').length);
+  /** Most recent alerts only (firing ones are always listed first). */
+  protected readonly recent = computed(() => this.alerts().slice(0, 8));
   protected readonly time = time;
 }

@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from rad.common.events import EventType, OrderEvent
-from rad.generator.runner import GeneratorSettings, backoff_delay
+from rad.generator.runner import GeneratorSettings, backfill, backoff_delay
 from rad.generator.simulator import (
     Anomaly,
     EventPayload,
@@ -153,3 +153,23 @@ def test_forced_anomaly_setting_accepts_empty_value_from_compose() -> None:
     assert GeneratorSettings.model_validate({"force_anomaly": ""}).force_anomaly is None
     forced = GeneratorSettings.model_validate({"force_anomaly": "payment_outage"})
     assert forced.force_anomaly is Anomaly.PAYMENT_OUTAGE
+
+
+class CollectingSink:
+    def __init__(self) -> None:
+        self.buffered = 0
+        self.events: list[EventPayload] = []
+
+    def enqueue(self, events: list[EventPayload]) -> None:
+        self.events.extend(events)
+
+
+async def test_backfill_replays_history_up_to_the_target_time() -> None:
+    sim = OrderStreamSimulator(FLAT, start=START)
+    sink = CollectingSink()
+    produced = await backfill(sim, sink, until=START + 600, max_buffered=10_000)
+
+    assert produced == len(sink.events) > 20_000  # ~50 events/s over 10 simulated minutes
+    times = [datetime.fromisoformat(p["occurred_at"]).timestamp() for p in sink.events]
+    assert min(times) >= START and max(times) <= START + 600
+    assert sim.current_time == START + 600

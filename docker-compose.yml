@@ -56,6 +56,8 @@ services:
       # Optional demo: payment_outage or traffic_drop, once, GEN_FORCE_ANOMALY_AFTER_S after start.
       RAD_GEN_FORCE_ANOMALY: ${GEN_FORCE_ANOMALY:-}
       RAD_GEN_FORCE_ANOMALY_AFTER_S: ${GEN_FORCE_ANOMALY_AFTER_S:-60}
+      # Replays this much history on first start so the dashboards are not empty.
+      RAD_GEN_BACKFILL_MINUTES: ${GEN_BACKFILL_MINUTES:-60}
     depends_on:
       api:
         condition: service_healthy

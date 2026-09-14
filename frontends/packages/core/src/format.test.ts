@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ConnectionState } from "./connection";
-import { dataAgeMs, describeConnection, formatAge, formatPercent } from "./format";
+import { dataAgeMs, describeConnection, formatAge, formatMad, formatPercent } from "./format";
 
 const base: ConnectionState = { status: "open", attempt: 0, nextRetryAt: null, lastMessageAt: null };
 
@@ -21,6 +21,11 @@ describe("describeConnection", () => {
 });
 
 describe("formatting helpers", () => {
+  it("formats amounts with the same digit grouping as counts", () => {
+    expect(formatMad(730_800_006.4)).toBe("730,800,006 MAD");
+    expect(formatMad(99.5)).toBe("100 MAD");
+  });
+
   it("formats percentages and missing values", () => {
     expect(formatPercent(0.1234)).toBe("12.3%");
     expect(formatPercent(null)).toBe("—");

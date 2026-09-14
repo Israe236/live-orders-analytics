@@ -13,7 +13,7 @@ import contextlib
 import logging
 import random
 import time
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from pydantic import field_validator
@@ -42,6 +42,9 @@ class GeneratorSettings(BaseSettings):
     # to watch an alert fire without waiting for a random anomaly).
     force_anomaly: Anomaly | None = None
     force_anomaly_after_s: float = 60.0
+    # Seed the dashboards with this many minutes of simulated history at startup, only when the
+    # last hour has no orders (so restarting the generator never duplicates history).
+    backfill_minutes: float = 0.0
 
     tick_interval_s: float = 0.25
     batch_size: int = 1_000
@@ -158,10 +161,60 @@ async def wait_for_api(client: httpx.AsyncClient) -> None:
         attempt += 1
 
 
+class EventSink(Protocol):
+    """What backfill needs from a shipper (lets tests use a fake)."""
+
+    buffered: int
+
+    def enqueue(self, events: list[EventPayload]) -> None: ...
+
+
+async def backfill(
+    simulator: OrderStreamSimulator,
+    sink: EventSink,
+    *,
+    until: float,
+    max_buffered: int,
+    step_s: float = 30.0,
+) -> int:
+    """Replay simulated history up to ``until`` as fast as the API accepts it.
+
+    Simulated time moves in small steps, and production waits whenever too many events are
+    buffered: backpressure instead of dropping events or growing memory.
+    """
+    produced = 0
+    t = simulator.current_time
+    while t < until:
+        t = min(t + step_s, until)
+        events = simulator.advance(t)
+        sink.enqueue(events)
+        produced += len(events)
+        # Short poll of a counter owned by the sender tasks; an Event would only add coupling.
+        while sink.buffered > max_buffered:  # noqa: ASYNC110
+            await asyncio.sleep(0.05)
+    return produced
+
+
+async def last_hour_has_orders(client: httpx.AsyncClient) -> bool:
+    try:
+        response = await client.get("/metrics/snapshot")
+        response.raise_for_status()
+        return int(response.json()["kpis"]["orders_placed"]) > 0
+    except httpx.HTTPError, KeyError, TypeError, ValueError:
+        return True  # when unsure, do not risk duplicating history
+
+
 async def run(settings: GeneratorSettings) -> None:
-    simulator = OrderStreamSimulator(settings.simulator_config(), start=time.time())
     async with httpx.AsyncClient(base_url=settings.api_url, timeout=15) as client:
         await wait_for_api(client)
+        now = time.time()
+        start = now
+        if settings.backfill_minutes > 0:
+            if await last_hour_has_orders(client):
+                log.info("recent orders found: skipping the history backfill")
+            else:
+                start = now - settings.backfill_minutes * 60
+        simulator = OrderStreamSimulator(settings.simulator_config(), start=start)
         log.info(
             "generating ~%.1f events/s (daily curve: %s, compression x%g)",
             settings.events_per_second,
@@ -170,11 +223,24 @@ async def run(settings: GeneratorSettings) -> None:
         )
         shipper = Shipper(client, settings)
         senders = [asyncio.create_task(shipper.run_sender()) for _ in range(settings.senders)]
-        started = time.monotonic()
-        next_stats = started + settings.stats_interval_s
         last_events = 0
         forced = False
         try:
+            if start < now:
+                produced = await backfill(
+                    simulator,
+                    shipper,
+                    until=time.time(),
+                    max_buffered=settings.batch_size * settings.senders * 4,
+                )
+                log.info(
+                    "backfilled %d events (%.0f minutes of history)",
+                    produced,
+                    settings.backfill_minutes,
+                )
+                last_events = simulator.stats.events
+            started = time.monotonic()
+            next_stats = started + settings.stats_interval_s
             while True:
                 tick_started = time.monotonic()
                 if (

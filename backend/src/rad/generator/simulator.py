@@ -199,6 +199,11 @@ class OrderStreamSimulator:
             multiplier *= 0.25
         return multiplier
 
+    @property
+    def current_time(self) -> float:
+        """The time up to which events have been produced (the last ``advance`` call)."""
+        return self._now
+
     def anomaly_at(self, t: float) -> Anomaly | None:
         return self._anomaly if t < self._anomaly_until else None
 
