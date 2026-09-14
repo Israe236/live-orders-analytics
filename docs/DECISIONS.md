@@ -608,6 +608,28 @@ The apps therefore only ever call their own origin:
   TypeScript from a workspace package, but Angular's builder and React Native's Metro treat
   `node_modules` as already-compiled code, so shipping built JS is what works for all three.
 
+### React Native specifics (Expo)
+- **Expo** (SDK 57) rather than a bare React Native project: the app runs on a real phone through
+  the free Expo Go app with no Android Studio or Xcode setup, and Expo configures Metro for
+  monorepos automatically (no custom `metro.config.js`).
+- **Not part of `docker compose`.** A phone app does not run in a container. It is started with
+  `npx expo start` and talks to the API over the local network. `EXPO_PUBLIC_API_URL` must be the
+  computer's LAN IP, because on the phone `localhost` is the phone itself. Expo inlines
+  `EXPO_PUBLIC_*` variables at bundle time, so they must be read as `process.env.EXPO_PUBLIC_API_URL`
+  (dot notation only).
+- **Exactly one React in the workspace.** Expo 57 pins React 19.2.3, while the web apps would
+  happily install the newer 19.3. Two copies of React in one app crash at runtime ("invalid hook
+  call"), so the workspace root has npm `overrides` forcing a single version everywhere.
+- **Charts without a chart library:** the revenue sparkline is two SVG paths drawn with
+  `react-native-svg` (included in Expo Go). The path computation is a pure function with unit
+  tests; bars and the status breakdown are plain `View`s with percentage widths.
+- **Mobile lifecycle instead of browser events:** when the app goes to the background, the OS may
+  suspend it and silently kill sockets. The app closes the connection on purpose (no retries
+  draining the battery) and reconnects as soon as it returns to the foreground. Stale-connection
+  detection from `@rad/core` covers network switches (Wi-Fi to mobile data) while in use.
+- **What it shows:** KPI grid, revenue sparkline, category bars, orders by status, firing alerts
+  and the live feed. It reuses the same memoized-sections approach as the web apps.
+
 ---
 
 ## 10. Problems met and how they were solved

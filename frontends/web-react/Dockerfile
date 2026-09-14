@@ -8,6 +8,7 @@ COPY package.json package-lock.json ./
 COPY packages/core/package.json packages/core/
 COPY web-react/package.json web-react/
 COPY web-angular/package.json web-angular/
+COPY mobile-react-native/package.json mobile-react-native/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --no-fund --workspace @rad/core --workspace @rad/web-react
 

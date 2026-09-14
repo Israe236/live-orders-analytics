@@ -5,8 +5,13 @@
   "workspaces": [
     "packages/*",
     "web-react",
-    "web-angular"
+    "web-angular",
+    "mobile-react-native"
   ],
+  "overrides": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
   "scripts": {
     "build:core": "npm run build -w @rad/core",
     "typecheck": "npm run typecheck --workspaces --if-present",

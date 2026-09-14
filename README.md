@@ -19,7 +19,7 @@ and **React Native**.
 - [x] M6 — Shared client core (`@rad/core`: types, reconnecting WebSocket, identity-preserving reducer)
 - [x] M7 — React dashboard (Recharts, React Query, memoized sections)
 - [x] M8 — Angular dashboard (signals, OnPush, tree-shaken ECharts)
-- [ ] M9 — React Native app
+- [x] M9 — React Native app (Expo, reuses `@rad/core`; see [its README](frontends/mobile-react-native/README.md))
 - [ ] M10 — CI
 - [ ] M11 — Benchmark & final README
 
