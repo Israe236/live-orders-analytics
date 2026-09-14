@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from rad.common.events import EventType, OrderEvent
-from rad.generator.runner import backoff_delay
+from rad.generator.runner import GeneratorSettings, backoff_delay
 from rad.generator.simulator import (
     Anomaly,
     EventPayload,
@@ -146,3 +146,10 @@ def test_backoff_uses_full_jitter_below_an_exponential_cap() -> None:
         delays = [backoff_delay(attempt, rng=rng) for _ in range(200)]
         assert all(0 <= d <= ceiling for d in delays)
         assert max(delays) > ceiling * 0.8  # really spread over the whole range
+
+
+def test_forced_anomaly_setting_accepts_empty_value_from_compose() -> None:
+    # model_validate takes raw values exactly as they come from the environment.
+    assert GeneratorSettings.model_validate({"force_anomaly": ""}).force_anomaly is None
+    forced = GeneratorSettings.model_validate({"force_anomaly": "payment_outage"})
+    assert forced.force_anomaly is Anomaly.PAYMENT_OUTAGE

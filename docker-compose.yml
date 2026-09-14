@@ -53,6 +53,9 @@ services:
       RAD_GEN_ANOMALIES_PER_HOUR: ${GEN_ANOMALIES_PER_HOUR:-2}
       # Longer than the 3-minute alert window, so an anomaly is visible to the alert rules.
       RAD_GEN_ANOMALY_DURATION_S: ${GEN_ANOMALY_DURATION_S:-240}
+      # Optional demo: payment_outage or traffic_drop, once, GEN_FORCE_ANOMALY_AFTER_S after start.
+      RAD_GEN_FORCE_ANOMALY: ${GEN_FORCE_ANOMALY:-}
+      RAD_GEN_FORCE_ANOMALY_AFTER_S: ${GEN_FORCE_ANOMALY_AFTER_S:-60}
     depends_on:
       api:
         condition: service_healthy

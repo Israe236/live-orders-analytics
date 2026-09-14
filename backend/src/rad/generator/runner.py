@@ -16,9 +16,10 @@ import time
 from typing import Any
 
 import httpx
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from rad.generator.simulator import EventPayload, OrderStreamSimulator, SimulatorConfig
+from rad.generator.simulator import Anomaly, EventPayload, OrderStreamSimulator, SimulatorConfig
 
 log = logging.getLogger("rad.generator")
 
@@ -37,12 +38,22 @@ class GeneratorSettings(BaseSettings):
     anomalies_per_hour: float = 1.0
     anomaly_duration_s: float = 120.0
     seed: int | None = None
+    # Demo helper: trigger this anomaly once, this many seconds after start (for screenshots or
+    # to watch an alert fire without waiting for a random anomaly).
+    force_anomaly: Anomaly | None = None
+    force_anomaly_after_s: float = 60.0
 
     tick_interval_s: float = 0.25
     batch_size: int = 1_000
     senders: int = 2
     max_buffered_events: int = 200_000
     stats_interval_s: float = 10.0
+
+    @field_validator("force_anomaly", mode="before")
+    @classmethod
+    def _empty_means_none(cls, value: object) -> object:
+        # docker compose passes an unset variable as an empty string.
+        return None if value == "" else value
 
     def simulator_config(self) -> SimulatorConfig:
         return SimulatorConfig(
@@ -159,11 +170,29 @@ async def run(settings: GeneratorSettings) -> None:
         )
         shipper = Shipper(client, settings)
         senders = [asyncio.create_task(shipper.run_sender()) for _ in range(settings.senders)]
-        next_stats = time.monotonic() + settings.stats_interval_s
+        started = time.monotonic()
+        next_stats = started + settings.stats_interval_s
         last_events = 0
+        forced = False
         try:
             while True:
                 tick_started = time.monotonic()
+                if (
+                    settings.force_anomaly is not None
+                    and not forced
+                    and tick_started - started >= settings.force_anomaly_after_s
+                ):
+                    simulator.force_anomaly(
+                        settings.force_anomaly,
+                        at=time.time(),
+                        duration_s=settings.anomaly_duration_s,
+                    )
+                    forced = True
+                    log.warning(
+                        "forced anomaly %s for %.0f s",
+                        settings.force_anomaly.value,
+                        settings.anomaly_duration_s,
+                    )
                 events = simulator.advance(time.time())
                 if events:
                     shipper.enqueue(events)
