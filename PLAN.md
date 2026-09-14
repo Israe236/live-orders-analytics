@@ -6,6 +6,10 @@ Angular (web) and React Native (mobile).
 
 This file is the working plan. Architecture reasoning lives in [docs/DECISIONS.md](docs/DECISIONS.md).
 
+> **Status (2026-09-14): all milestones M0–M11 are done** and published, with CI passing. Additions
+> beyond the plan: a history backfill in the generator, and an alert-rule backtest that replaced the
+> first thresholds. Open item: the React Native app has not been run on a physical device.
+
 ---
 
 ## 1. Architecture

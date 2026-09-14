@@ -104,14 +104,18 @@ The React Native app is not pictured because it has not been run on a device yet
 
 Measured with the benchmark in [`backend/src/rad/bench`](backend/src/rad/bench/benchmark.py), run
 inside the compose network against the full stack. The generator was stopped during the run.
-Raw result: [`backend/bench/results/2026-09-14_1429_8x500_rate500.json`](backend/bench/results/2026-09-14_1429_8x500_rate500.json).
+Two runs with identical settings. Run 1 used the demo database, which already held a day of data;
+run 2 used a fresh, isolated database. Raw results:
+[run 1](backend/bench/results/2026-09-14_1429_8x500_rate500.json),
+[run 2](backend/bench/results/2026-09-14_1559_8x500_rate500_clean-db.json).
 
-| Metric | Result |
-|---|---|
-| **Sustained ingestion** (8 concurrent senders, 500-event batches, 60 s after 10 s warm-up) | **15,408 events/s** committed (924,500 events), 0 errors, 0 × `429` |
-| HTTP acknowledgement latency at max load (batch of 500, includes commit) | p50 220 ms · p95 528 ms · p99 724 ms |
-| **End-to-end latency** at 500 events/s offered (event created → dashboard update received over WebSocket) | **p50 563 ms · p95 1,055 ms · p99 1,451 ms** · max 1,750 ms |
-| Batches that never reached a dashboard update | 0 of 600 |
+| Metric | Run 1 (demo database) | Run 2 (clean database) |
+|---|---|---|
+| **Sustained ingestion** (8 concurrent senders, 500-event batches, 60 s after 10 s warm-up) | **15,408 events/s**, 0 errors, 0 × `429` | **17,908 events/s**, 0 errors, 0 × `429` |
+| HTTP acknowledgement at max load (batch of 500, includes commit) | p50 220 · p95 528 · p99 724 ms | p50 208 · p95 316 · p99 377 ms |
+| HTTP acknowledgement at 500 events/s (batch of 50) | p50 27 · p95 303 · p99 1,122 ms | p50 13 · p95 56 · p99 133 ms |
+| **End-to-end latency** at 500 events/s (event created → dashboard update received over WebSocket) | **p50 563 · p95 1,055 · p99 1,451 ms** | **p50 550 · p95 956 · p99 963 ms** |
+| Batches that never reached a dashboard update | 0 of 600 | 0 of 600 |
 
 Machine: laptop with Intel Core i7-13620H (10 cores / 16 threads), 16 GB RAM, NVMe SSD, Windows 11,
 Docker Desktop 29.6 (WSL2 VM limited to 8 CPUs / 10.7 GB). PostgreSQL, the API and the benchmark
@@ -122,10 +126,10 @@ How to read these numbers:
   half a second for the next dashboard update. The p50 of 563 ms is consistent with that.
 - The end-to-end measurement is a slight **upper bound**: a batch counts as delivered with the first
   update generated after the API *acknowledged* it, and the acknowledgement comes just after the commit.
-- During the latency phase the acknowledgement p99 was 1,122 ms even at only 500 events/s. This
-  was not investigated. A plausible cause is PostgreSQL background work after the previous phase
-  inserted ~925k rows, but it has not been verified.
-- A single run on a laptop, not a controlled lab. Treat the numbers as an order of magnitude.
+- In run 1 the acknowledgement p99 reached 1,122 ms at only 500 events/s. On the clean database
+  (run 2) it was 133 ms. That points to database state (a larger, busier database), but the cause
+  was not profiled, so this is a hypothesis, not a finding.
+- Two runs on a laptop, not a controlled lab. Treat the numbers as an order of magnitude.
 
 Reproduce:
 

@@ -736,6 +736,12 @@ makes the measurement a slight **upper bound** (it can only overstate latency, n
   snapshot queries per second.
 - An unexplained outlier: at only 500 events/s the HTTP acknowledgement p99 was 1.1 s. It is
   reported as is, and profiling it is listed as a next step.
+- **A second run on a clean, isolated database** (same settings) gave 17,908 events/s, end-to-end
+  p50 550 ms / p99 963 ms, and an acknowledgement p99 of only 133 ms at 500 events/s. The outlier
+  did not repeat. The first run had used the demo database, which already held a day of data and had
+  just absorbed ~925k benchmark rows. That suggests the database's state rather than the code, but
+  without profiling it stays a hypothesis. Repeating a measurement before explaining it was the
+  cheap, honest step.
 
 ---
 
