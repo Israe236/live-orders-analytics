@@ -3,7 +3,8 @@
   "private": true,
   "description": "Dashboards for the realtime analytics pipeline: shared core, React, Angular, React Native.",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "web-react"
   ],
   "scripts": {
     "build:core": "npm run build -w @rad/core",
