@@ -1,0 +1,29 @@
+{
+  "name": "@rad/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Framework-agnostic client for the live analytics WebSocket: message types, reconnection with backoff, state reducer, shared dashboard styles.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./dashboard.css": "./styles/dashboard.css"
+  },
+  "files": [
+    "dist",
+    "styles"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "vitest": "^4.0.8"
+  }
+}
