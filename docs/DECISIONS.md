@@ -498,7 +498,119 @@ rebuilding engine state from the table, would be more code for little benefit.
 
 ---
 
-## 9. Problems met and how they were solved
+## 9. Clients: one core, three apps
+
+### What lives in `@rad/core` (and why)
+The same dashboard exists three times: React (web), Angular (web), React Native (mobile). The
+parts that are easy to get subtly wrong are written **once**, in a framework-free TypeScript
+package, and tested once:
+
+| Module | Responsibility |
+|---|---|
+| `messages.ts` | TypeScript types mirroring the server's Pydantic models; `parseServerMessage` returns `null` for anything unknown, so a newer server never crashes an older client |
+| `backoff.ts` | exponential backoff with full jitter |
+| `connection.ts` | `LiveConnection`: keeps a WebSocket alive (below) |
+| `reducer.ts` | merges server messages into dashboard state, preserving object identity |
+| `format.ts` | MAD amounts, percentages, "data is 0.8 s old", connection status wording |
+| `styles/dashboard.css` | the look shared by both web apps (same class names) |
+
+Each app only renders. A bug fixed in the reconnection logic is fixed for all three clients.
+
+### Reconnection with backoff (client side)
+`LiveConnection` wraps a WebSocket and never gives up unless told to:
+- After any disconnect it waits `random(0.25 s, min(30 s, 0.5 s × 2^attempt))` and tries again.
+  The random part spreads out thousands of clients that lost the server at the same instant.
+- The attempt counter resets only when a **message** arrives, not when the socket opens. A server
+  that accepts and immediately closes (e.g. 1013 "busy") would otherwise reset the backoff on
+  every attempt, and clients would hammer it.
+- **Dead connections that look alive:** after a laptop sleeps or a mobile network changes, a
+  socket can stay "open" while nothing flows. The server sends something every second, so
+  5 seconds of silence means dead. The client closes the socket itself and reconnects.
+- **Late events from an old socket are ignored.** Every handler checks it still belongs to the
+  current socket; otherwise a delayed `close` from a replaced socket would trigger a second,
+  parallel reconnection. A test covers this case.
+- **Offline / online:** browsers (and apps) report network changes. While offline, retries stop
+  (they cannot succeed and would only burn battery). When the network comes back, the client
+  connects immediately with a fresh backoff.
+- **Background tabs:** browsers throttle timers in hidden tabs. When the tab becomes visible
+  again during a backoff wait, the web apps reconnect immediately.
+
+All of this is tested with a fake socket and fake timers: the delays grow 500 → 1,000 → 2,000 →
+4,000 ms while the server keeps failing, reset after a real message, a silent socket is dropped
+after exactly 5 s, `stop()` never reconnects, and "offline" pauses retries.
+
+### Degraded mode: polling when the WebSocket is blocked
+Some corporate proxies block WebSockets. While the connection is not open, both web apps poll
+`GET /api/metrics/snapshot` every 5 s and show the newest of the two sources. Polling stops the
+moment the live connection is back. Users see slightly older numbers instead of a blank page.
+
+### Smooth charts without flicker or full re-renders
+Two things cause flicker in live dashboards: re-creating or re-animating a whole chart on every
+update, and re-rendering every component on every message. Both are addressed:
+
+1. **Identity-preserving reducer.** When an update arrives, the reducer compares each part of the
+   state with the previous one *by value* and keeps the **old object** when nothing changed. If
+   the category breakdown is identical, the new state holds the same array as before.
+2. **Components re-render only when their own slice changes.**
+   - React: every dashboard section is wrapped in `React.memo` and receives only its slice.
+     Unchanged slice = same reference = no re-render.
+   - Angular: `OnPush` components with signal inputs. Angular skips a component whose inputs are
+     the same objects; `computed` signals only notify readers when the value's identity changes.
+3. **Charts update in place.**
+   - Recharts: animations are turned off for live series. Otherwise each update would replay the
+     "draw the line" animation on the whole chart, which reads as flicker.
+   - ECharts (Angular): the chart receives its static options once and then only `[merge]` with
+     the new data, so the chart instance persists and moves smoothly to the new values.
+4. **Stable list keys.** Feed rows are keyed by `event_id`, so only new rows are created; the
+   short highlight animation plays only on them.
+
+This is **tested, not assumed**. In the React app a test-only counter records how many times each
+section renders (Vite removes the counter from production builds). The test renders the dashboard,
+applies an update where only the current minute's revenue changed, and asserts that the revenue
+chart rendered once while the KPI cards, category chart, status bar, city table and feed rendered
+zero times. A second update changes the categories and asserts that only the category chart
+re-renders. The Angular service test checks the same identity guarantees on its signals.
+
+### React specifics
+- **React Query where it fits:** the alert history (loaded once) and the degraded-mode snapshot
+  polling (`enabled` only while disconnected, `refetchInterval` 5 s). Live data does not go through
+  React Query: a WebSocket stream is not a request/response cache.
+- `useReducer` + the core reducer; the WebSocket lives in a hook tied to the component's lifetime.
+  React's development StrictMode deliberately mounts effects twice, and `start()`/`stop()` handle it.
+
+### Angular specifics
+- Angular 22: standalone components, zoneless change detection (the default for new projects),
+  signals, and the new control flow (`@if`, `@for` with `track`).
+- **Chart library: ECharts via `ngx-echarts`.** Recharts is React-only. ECharts was chosen over
+  Chart.js because its `setOption` merge model maps directly onto live updates, it handles large
+  series well, and it can be **tree-shaken**: the app registers only the line and bar charts,
+  grid, tooltip and canvas renderer instead of shipping all of ECharts.
+- Degraded-mode polling is an RxJS pipeline: `connection status → switchMap(open ? nothing :
+  timer every 5 s → GET snapshot)`, turned back into a signal.
+
+### Serving the web apps: same origin through nginx
+Each web app is built into static files and served by nginx. The same nginx forwards `/api/*` and
+`/ws/*` to the API container, and the Vite and Angular dev servers do the same during development.
+The apps therefore only ever call their own origin:
+- no CORS configuration, and no API hostname baked into the build;
+- the WebSocket proxy needs `proxy_http_version 1.1`, the `Upgrade`/`Connection` headers, and a
+  long `proxy_read_timeout`. Without them nginx would refuse the upgrade or cut connections that
+  look idle.
+
+### Workspace details that caused friction
+- **TypeScript 6.0, not 7.** TypeScript 7 was the newest release, but Angular 22's compiler and
+  typescript-eslint both require `>=6.0 <6.1`. The whole workspace pins `~6.0.3` so a single
+  compiler version is installed.
+- **`npm ci` in Docker needs every workspace's `package.json`,** even when building only one app,
+  because it checks the lock file against all of them. Each Dockerfile copies all manifests first
+  (a cached layer), then only the sources it needs.
+- `@rad/core` is **compiled** to JavaScript before the apps use it (`dist/`). Bundlers can import
+  TypeScript from a workspace package, but Angular's builder and React Native's Metro treat
+  `node_modules` as already-compiled code, so shipping built JS is what works for all three.
+
+---
+
+## 10. Problems met and how they were solved
 
 ### The Python virtual environment was very slow to install
 The project folder is on the Windows drive, while Python runs inside WSL (Linux). Creating the
@@ -518,3 +630,28 @@ The first `docker compose up` printed a line for every HTTP request from both th
 (httpx logs at INFO level) and the API (uvicorn access log) — several per second — hiding the
 generator's useful statistics line. httpx is now set to WARNING in the generator and the API runs
 with `--no-access-log`.
+
+### Docker Desktop failures during development, and what they showed
+Twice, Docker Desktop's engine stopped answering (`500 Internal Server Error` on every API call),
+taking PostgreSQL down. Two useful observations:
+- The API container crashed at startup (it could not resolve the database host) and came back on
+  its own once the database returned, thanks to `restart: unless-stopped`.
+- The generator kept producing while the database was down. Its bounded buffer and retries with
+  backoff held the events, and when everything came back it flushed the backlog. For a few
+  seconds the dashboard showed about 2,600 events/s being committed, then it went back to normal.
+  Nothing was lost, and duplicates from retries were ignored by the API.
+
+### A Docker build failed because of a comment line
+The Dockerfiles started with `# syntax=docker/dockerfile:1`. That line tells BuildKit to download
+its Dockerfile parser image from Docker Hub before building. When the network had a TLS
+timeout, every build failed at that step, even though all the base images were already cached
+locally. The line was removed: the parser built into current Docker already supports the
+`RUN --mount=type=cache` feature it was there for, so builds now work offline.
+
+### Unit tests that were wrong, not the code
+- A formatting test expected `850 ms` to display as `0.9 s`. JavaScript's `(0.85).toFixed(1)` gives
+  `"0.8"`, because 0.85 cannot be stored exactly in binary floating point (it is really
+  0.84999…). The test now uses a value that is not on a rounding boundary.
+- An Angular test checked that the fallback snapshot request was sent, but the polling starts on
+  an RxJS `timer(0)`, a macrotask. The assertion ran before the timer fired. The test now lets
+  one macrotask pass first.

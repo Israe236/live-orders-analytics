@@ -4,7 +4,8 @@
   "description": "Dashboards for the realtime analytics pipeline: shared core, React, Angular, React Native.",
   "workspaces": [
     "packages/*",
-    "web-react"
+    "web-react",
+    "web-angular"
   ],
   "scripts": {
     "build:core": "npm run build -w @rad/core",

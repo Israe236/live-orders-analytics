@@ -1,0 +1,46 @@
+<div class="app">
+  <header class="topbar">
+    <div>
+      <h1>Live Orders</h1>
+      <p class="muted">E-commerce analytics · Morocco · Angular</p>
+    </div>
+    <app-connection-badge
+      [connection]="dashboard.connection()"
+      [lastEventAt]="dashboard.pipeline()?.last_event_occurred_at ?? null"
+    />
+  </header>
+
+  @if (dashboard.snapshot(); as snapshot) {
+    <app-alert-banner [alerts]="dashboard.firingAlerts()" />
+    <main class="grid">
+      <!-- Each section receives only its own slice. Unchanged slices keep their identity, so
+           OnPush components with signal inputs skip re-rendering. -->
+      <section class="area-kpis">
+        <app-kpi-cards
+          [kpis]="snapshot.kpis"
+          [eventsPerSecond]="dashboard.live() ? (dashboard.pipeline()?.events_per_second ?? null) : null"
+        />
+      </section>
+      <section class="card area-revenue">
+        <app-revenue-chart [minute]="snapshot.revenue_per_minute" [hour]="snapshot.revenue_per_hour" />
+      </section>
+      <section class="card area-categories">
+        <app-category-chart [items]="snapshot.categories" />
+      </section>
+      <section class="card area-status">
+        <app-status-bar [counts]="snapshot.orders_by_status" />
+      </section>
+      <section class="card area-cities">
+        <app-city-table [items]="snapshot.cities" />
+      </section>
+      <section class="card area-feed">
+        <app-event-feed [events]="dashboard.feed()" />
+      </section>
+      <section class="card area-alerts">
+        <app-alert-history [alerts]="dashboard.alerts()" />
+      </section>
+    </main>
+  } @else {
+    <p class="empty loading">Loading the dashboard…</p>
+  }
+</div>

@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # One image for the API, the event generator and the benchmark (they share the same code).
 FROM python:3.14-slim
 

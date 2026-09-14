@@ -58,5 +58,27 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  web-react:
+    build:
+      context: ./frontends
+      dockerfile: web-react/Dockerfile
+    ports:
+      - "${WEB_REACT_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web-angular:
+    build:
+      context: ./frontends
+      dockerfile: web-angular/Dockerfile
+    ports:
+      - "${WEB_ANGULAR_PORT:-4200}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:

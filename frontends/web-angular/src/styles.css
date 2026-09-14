@@ -1,0 +1,15 @@
+/* The dashboard look is shared with the React app (same class names). */
+@import "@rad/core/dashboard.css";
+
+/* Angular host elements are inline by default; the layout expects blocks. */
+app-root,
+app-kpi-cards,
+app-revenue-chart,
+app-category-chart,
+app-status-bar,
+app-city-table,
+app-event-feed,
+app-alert-banner,
+app-alert-history {
+  display: block;
+}

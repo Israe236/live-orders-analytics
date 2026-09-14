@@ -16,9 +16,9 @@ and **React Native**.
 - [x] M3 — Event generator (order lifecycles, daily curve, bursts, anomalies, malformed events)
 - [x] M4 — WebSocket layer (1 Hz fan-out, conflation, slow-client eviction, periodic resync)
 - [x] M5 — Alerting (4 threshold rules, anti-flapping state machine, pushed live and stored)
-- [ ] M6 — Shared client core
-- [ ] M7 — React dashboard
-- [ ] M8 — Angular dashboard
+- [x] M6 — Shared client core (`@rad/core`: types, reconnecting WebSocket, identity-preserving reducer)
+- [x] M7 — React dashboard (Recharts, React Query, memoized sections)
+- [x] M8 — Angular dashboard (signals, OnPush, tree-shaken ECharts)
 - [ ] M9 — React Native app
 - [ ] M10 — CI
 - [ ] M11 — Benchmark & final README
@@ -26,9 +26,15 @@ and **React Native**.
 ## Run it (so far)
 
 ```bash
-docker compose up --build                     # postgres + api + generator
-curl http://localhost:8000/metrics/snapshot   # live KPIs, series, breakdowns
+docker compose up --build        # postgres + api + generator + both web dashboards
 ```
+
+| What | URL |
+|---|---|
+| React dashboard | http://localhost:5173 |
+| Angular dashboard | http://localhost:4200 |
+| API (OpenAPI docs) | http://localhost:8000/docs |
+| Live snapshot (REST) | http://localhost:8000/metrics/snapshot |
 
 The generator is tuned with environment variables (see [.env.example](.env.example)), e.g.
 `GEN_EVENTS_PER_SECOND=100 GEN_TIME_COMPRESSION=1440 docker compose up`.
@@ -39,4 +45,10 @@ The generator is tuned with environment variables (see [.env.example](.env.examp
 docker compose up -d postgres            # tests use a rad_test database on localhost:5432
 cd backend && uv sync
 uv run ruff check . && uv run mypy && uv run pytest
+
+cd frontends && npm install
+npm run build:core                       # the apps import the compiled @rad/core
+npm run test && npm run lint && npm run typecheck
+npm run dev -w @rad/web-react            # http://localhost:5173 (proxies /api and /ws to :8000)
+npm run start -w @rad/web-angular        # http://localhost:4200
 ```
