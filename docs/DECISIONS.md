@@ -632,7 +632,51 @@ The apps therefore only ever call their own origin:
 
 ---
 
-## 10. Problems met and how they were solved
+## 10. Benchmark: how the numbers are measured
+
+### Where it runs, and why
+The benchmark is part of the backend package (`python -m rad.bench`) and runs **inside the compose
+network**, in a container next to the API. The latency measurement compares a timestamp taken by
+the client with one taken by the server. Both containers run in the same Docker VM and read the
+same clock, so the comparison is meaningful. Running it from Windows would mix two clocks that can
+differ by milliseconds. The generator is stopped during a run so its traffic does not mix with the
+measured load.
+
+### Phase 1: sustained throughput (closed loop)
+Several senders each post a batch, wait for the answer, and immediately post the next one. That is
+a *closed loop*: the load adapts to how fast the server answers, so it finds the maximum
+sustainable rate. Events are counted from the API's own `"inserted"` answers, by the time the
+answer arrived, during a 60-second window that starts after a 10-second warm-up (connection
+setup, caches, JIT-like warm paths). Any `429` or error is counted separately.
+
+### Phase 2: end-to-end latency (open loop)
+Here batches are sent at a **fixed rate** regardless of how fast answers come back (an *open loop*),
+like real producers that don't slow down to wait. A WebSocket client listens exactly like a
+dashboard. For each batch:
+
+> end-to-end latency = moment the first dashboard update that includes the batch arrives − moment the events were created
+
+How do we know an update "includes" a batch without inspecting every event? Each dashboard state
+message carries `generated_at`, the server time when the snapshot started. The snapshot reads the
+database after that instant, so it contains every transaction committed before it. The client
+records when the API **acknowledged** each batch. That acknowledgement happens right after the
+commit, so "`generated_at` later than the acknowledgement" guarantees the batch is included. This
+makes the measurement a slight **upper bound** (it can only overstate latency, never understate it).
+
+### Reading the first results
+- ~15,400 events/s committed with 8 senders × 500-event batches, no throttling, on a laptop.
+  Where the ceiling comes from (CPU for JSON parsing and validation in one Python process, or
+  PostgreSQL) was **not profiled**, so no claim is made about the bottleneck.
+- End-to-end p50 ≈ 560 ms at 500 events/s. With a push every second, an event waits on average
+  ~500 ms for the next tick, so almost all of the latency is the deliberate tick, not processing.
+  To go lower, the tick interval (`RAD_WS_TICK_INTERVAL_S`) can be reduced, at the cost of more
+  snapshot queries per second.
+- An unexplained outlier: at only 500 events/s the HTTP acknowledgement p99 was 1.1 s. It is
+  reported as is, and profiling it is listed as a next step.
+
+---
+
+## 11. Problems met and how they were solved
 
 ### The Python virtual environment was very slow to install
 The project folder is on the Windows drive, while Python runs inside WSL (Linux). Creating the

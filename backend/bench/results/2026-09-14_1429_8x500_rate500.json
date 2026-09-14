@@ -1,0 +1,65 @@
+{
+  "started_at": "2026-09-14T13:27:25.890210+00:00",
+  "machine": {
+    "python": "3.14.7",
+    "platform": "Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "logical_cpus": 8,
+    "cpu_model": "13th Gen Intel(R) Core(TM) i7-13620H",
+    "memory_gb": 10.7
+  },
+  "settings": {
+    "api_url": "http://api:8000",
+    "ws_url": "ws://api:8000/ws/live",
+    "senders": 8,
+    "batch_size": 500,
+    "duration": 60.0,
+    "warmup": 10.0,
+    "latency_rate": 500.0,
+    "latency_batch_size": 50,
+    "latency_duration": 60.0,
+    "skip_throughput": false,
+    "skip_latency": false
+  },
+  "throughput": {
+    "senders": 8,
+    "batch_size": 500,
+    "warmup_s": 10.0,
+    "measured_s": 60.0,
+    "events_committed": 924500,
+    "events_per_second": 15408.3,
+    "requests": 1849,
+    "throttled_429": 0,
+    "errors": 0,
+    "ack_latency_ms": {
+      "count": 1849,
+      "p50": 220.1,
+      "p95": 527.7,
+      "p99": 724.4,
+      "max": 2607.9
+    }
+  },
+  "latency": {
+    "offered_events_per_second": 500.0,
+    "batch_size": 50,
+    "duration_s": 60.0,
+    "batches_sent": 600,
+    "batches_failed": 0,
+    "batches_never_seen_on_dashboard": 0,
+    "dashboard_messages_received": 63,
+    "ack_latency_ms": {
+      "count": 600,
+      "p50": 26.7,
+      "p95": 302.9,
+      "p99": 1122.5,
+      "max": 1622.3
+    },
+    "end_to_end_latency_ms": {
+      "count": 600,
+      "p50": 563.2,
+      "p95": 1054.8,
+      "p99": 1451.1,
+      "max": 1750.3
+    }
+  },
+  "finished_at": "2026-09-14T13:29:43.100147+00:00"
+}
