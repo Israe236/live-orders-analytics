@@ -41,15 +41,16 @@ class Settings(BaseSettings):
 
     # --- Alerting ---------------------------------------------------------------------------
     alert_window_minutes: int = 3
-    alert_cancellation_rate: float = 0.15
+    # Defaults chosen with the alert backtest (python -m rad.alerts.backtest).
+    alert_cancellation_rate: float = 0.20
     alert_cancellation_min_orders: int = 30
-    alert_revenue_drop_ratio: float = 0.5
+    alert_revenue_drop_ratio: float = 0.6
     alert_revenue_min_baseline_mad_per_min: float = 5_000.0
     alert_dead_letter_ratio: float = 0.05
     alert_dead_letter_min_events: int = 100
     alert_stall_after_s: float = 30.0
     # Hysteresis in time: breached this long before firing, healthy this long before resolving.
-    alert_fire_after_s: float = 10.0
+    alert_fire_after_s: float = 30.0
     alert_resolve_after_s: float = 30.0
 
     def alert_thresholds(self) -> Thresholds:

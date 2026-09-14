@@ -48,10 +48,10 @@ def test_healthy_traffic_breaches_nothing() -> None:
 @pytest.mark.parametrize(
     ("placed", "cancelled", "breached"),
     [
-        (1_000, 150, False),  # exactly at the threshold: not above it
-        (1_000, 151, True),
+        (1_000, 200, False),  # exactly at the 20% threshold: not above it
+        (1_000, 201, True),
         (29, 29, False),  # 100% but below the minimum volume
-        (30, 5, True),  # 16.7% at the minimum volume
+        (30, 7, True),  # 23.3% at the minimum volume
         (0, 0, False),
     ],
 )
@@ -67,8 +67,8 @@ def test_cancellation_rate_rule(placed: int, cancelled: int, breached: bool) -> 
 @pytest.mark.parametrize(
     ("recent", "previous", "breached"),
     [
-        (250_000, 500_000, False),  # exactly a 50% drop: not above the threshold
-        (249_000, 500_000, True),
+        (200_000, 500_000, False),  # exactly a 60% drop: not above the threshold
+        (199_000, 500_000, True),
         (900_000, 500_000, False),  # an increase is never an alert
         (0, 20_000, False),  # previous 4,000 MAD/min is below the 5,000 baseline
     ],

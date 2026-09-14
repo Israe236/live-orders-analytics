@@ -116,11 +116,14 @@ How to read these numbers:
 
 Reproduce:
 
+Run it as a separate compose project, so its ~1 million synthetic events land in their own
+database instead of distorting the demo dashboards:
+
 ```bash
-docker compose up -d --build
-docker compose stop generator
-docker compose run --rm --no-deps -T generator python -m rad.bench > result.json
-docker compose start generator
+docker compose stop                                   # free the ports
+docker compose -p rad-bench up -d --build postgres api
+docker compose -p rad-bench run --rm --no-deps -T generator python -m rad.bench > result.json
+docker compose -p rad-bench down                      # keeps its volume unless -v is added
 ```
 
 ## Alerting rules
@@ -129,22 +132,34 @@ Evaluated every second on 3-minute windows read from the aggregate tables.
 
 | Rule | Fires when (default) | Guard against noise | Severity |
 |---|---|---|---|
-| `cancellation_rate` | cancellations ÷ orders placed > **15%** | ≥ 30 orders in the window | warning |
-| `revenue_drop` | revenue per minute more than **50%** below the previous window | previous window ≥ 5,000 MAD/min | critical |
+| `cancellation_rate` | cancellations ÷ orders placed > **20%** | ≥ 30 orders in the window | warning |
+| `revenue_drop` | revenue per minute more than **60%** below the previous window | previous window ≥ 5,000 MAD/min | critical |
 | `dead_letter_ratio` | rejected ÷ received events > **5%** | ≥ 100 events in the window | warning |
 | `pipeline_stalled` | no event stored for **30 s** | — | critical |
 
-An alert fires only after its rule has been breached **continuously for 10 s**, and resolves only after
+An alert fires only after its rule has been breached **continuously for 30 s**, and resolves only after
 **30 s** of health, so values hovering around a threshold do not flap. Every threshold is configurable
-(`RAD_ALERT_*`). The generator's anomalies (payment outage, traffic drop) are designed to trigger
-the first two rules.
+(`RAD_ALERT_*`).
+
+**The thresholds come from a backtest, not intuition.** The first defaults (15%, 50%, 10 s) raised
+constant short false alerts on live traffic. `python -m rad.alerts.backtest` replays days of simulated
+traffic with labelled incidents through the production rules. Over 10 simulated days with 40 payment
+outages and 40 traffic drops (4 minutes each):
+
+| Settings | False alerts / day | Payment outages detected | Traffic drops detected |
+|---|---|---|---|
+| First defaults: 15%, 50%, 10 s | 48.3 | 39 / 40 (median 26 s) | 40 / 40 (median 130 s) |
+| **Chosen: 20%, 60%, 30 s** | **0.7** | **40 / 40 (median 77 s)** | **33 / 40 (median 150 s)** |
+
+Most missed traffic drops happen around 4 a.m., when traffic is too low for revenue to show a clear
+drop. The full comparison of 8 settings is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Tests and CI
 
 | Part | Tooling | Tests |
 |---|---|---|
-| Backend | pytest (real PostgreSQL + real uvicorn server), ruff, mypy `--strict` | 102 |
-| `@rad/core` | vitest | 27 |
+| Backend | pytest (real PostgreSQL + real uvicorn server), ruff, mypy `--strict` | 106 |
+| `@rad/core` | vitest | 28 |
 | React app | vitest + Testing Library, ESLint | 4 |
 | Angular app | Angular unit-test builder (vitest), angular-eslint | 3 |
 | React Native app | vitest, `tsc`, Metro web export | 4 |
@@ -198,7 +213,9 @@ PLAN.md                  milestones and their definition of done
   not share the live feed. (Metrics stay correct, since they come from the shared database.)
 - **No retention.** Raw events and minute buckets grow forever; there is no partitioning or pruning.
 - "Orders by status" counts **all orders ever seen**, not a rolling window.
-- **Static alert thresholds**, blind to seasonality; alert evaluation stops if the database is down.
+- **Static alert thresholds**, blind to seasonality: in the backtest most missed traffic drops were at
+  night. Alert evaluation also stops if the database is down.
+- Alert thresholds were tuned on the **simulator's** traffic; real traffic would need its own backtest.
 - **No authentication or TLS** on the API or WebSocket.
 - End-to-end latency cannot go below the **1-second push tick** by design.
 - The benchmark ran on one laptop, client and server sharing CPUs, one run.
@@ -210,6 +227,7 @@ PLAN.md                  milestones and their definition of done
 - PostgreSQL `LISTEN/NOTIFY` so several API instances can fan out every commit (no Redis needed).
 - Partition `events` by day with a retention job; try `COPY` for higher ingest throughput.
 - Profile the ingest path under load (and the acknowledgement p99 outlier) before tuning.
-- Rolling 24-hour status counts; seasonality-aware alert baselines (same hour last week).
+- Rolling 24-hour status counts; seasonality-aware alert baselines (order counts versus the same hour
+  on previous days) to catch night-time traffic drops.
 - Authentication for producers and dashboards; TLS termination at nginx.
 - Browser end-to-end tests (Playwright) and an EAS build of the mobile app.

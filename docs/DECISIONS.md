@@ -421,8 +421,8 @@ PostgreSQL `LISTEN/NOTIFY`, so every process hears about every commit.
 ### The rules
 | Rule | Fires when (default) | Guard against noise | Severity |
 |---|---|---|---|
-| `cancellation_rate` | cancellations ÷ orders placed in the last 3 min **> 15%** | at least 30 orders in the window | warning |
-| `revenue_drop` | revenue per minute in the last 3 min is **more than 50% below** the 3 min before | previous window ≥ 5,000 MAD/min | critical |
+| `cancellation_rate` | cancellations ÷ orders placed in the last 3 min **> 20%** | at least 30 orders in the window | warning |
+| `revenue_drop` | revenue per minute in the last 3 min is **more than 60% below** the 3 min before | previous window ≥ 5,000 MAD/min | critical |
 | `dead_letter_ratio` | rejected ÷ (accepted + rejected) in the last 3 min **> 5%** | at least 100 events in the window | warning |
 | `pipeline_stalled` | no event stored for **30 s** | — | critical |
 
@@ -459,10 +459,73 @@ seconds before firing (next section). The generator's anomalies last **4 minutes
 window, so they're actually visible to the rules. A trade-off: shorter windows detect faster but
 get noisier.
 
+### Backtesting the rules: the thresholds were wrong, and how that was found
+The first defaults (15% cancellations, 50% revenue drop, 10 s before firing) came from reasoning
+about the generator, not from measurement. Running the stack for a few hours showed the problem:
+
+- The alert history was full of short alerts sitting exactly at the threshold (cancellation rate
+  "15.0%", "15.1%"; revenue drop "50–51%"), each resolving a minute or two later.
+- Every one of them started **10–12 seconds after a minute boundary**. With a 10 s delay before
+  firing, the breach itself began exactly when the window moved forward by one minute.
+- A likely mechanism: a flash sale creates a minute with many placements. When that minute
+  leaves the window, its placements leave with it, but the cancellations of those orders (which
+  arrive 5–60 seconds later) are still inside, so cancellations ÷ placements jumps. The same shift
+  moves the sale's revenue into the "previous" window, making revenue look like it dropped.
+
+Measuring noise on a few hours of real data was not enough. The sample was small, and the
+generator also injects random anomalies, so real incidents and noise could not be told apart.
+Two alternative rule designs (a 10-minute cancellation window, and comparing revenue with the
+median of the previous 15 minutes) were replayed over the stored minute buckets and were **not**
+better, so they were not adopted.
+
+Instead, a **backtest** was built (`python -m rad.alerts.backtest`):
+1. It replays the generator's simulator offline for days of traffic, with the daily curve and
+   flash sales, and injects labelled incidents at known times (a payment outage and a traffic
+   drop, alternating, 8 per simulated day, 4 minutes each, at night, lunch and evening hours).
+2. It sums events per second of event time.
+3. Once per simulated second, it runs the **production** rule functions and the same anti-flapping
+   engine with the live windows (aligned on minute buckets, current minute partly filled).
+4. An alert starting during an incident (or within one window after it) is attributed to that
+   incident; any other alert is a **false alert**. An incident is **detected** when its expected rule
+   fires during that period.
+
+Results over 10 simulated days (2 seeds × 5 days, 20 events/s base rate, 40 incidents of each
+kind). Raw output: `backend/bench/results/2026-09-14_alert-backtest_5d-x2.json`.
+
+| Window, cancel threshold, drop threshold, delay before firing | False alerts / day (cancellation · revenue) | Payment outages detected (median delay) | Traffic drops detected (median delay) |
+|---|---|---|---|
+| 3 min, 15%, 50%, 10 s (first defaults) | **39.5 · 8.8** | 39 / 40 (26 s) | 40 / 40 (130 s) |
+| 3 min, 20%, 60%, 10 s | 1.3 · 0.7 | 40 / 40 (57 s) | 37 / 40 (130 s) |
+| **3 min, 20%, 60%, 30 s (chosen)** | **0.1 · 0.6** | **40 / 40 (77 s, max 97 s)** | **33 / 40 (150 s)** |
+| 3 min, 25%, 60%, 30 s | 0.0 · 0.6 | 40 / 40 (90 s) | 33 / 40 (150 s) |
+| 3 min, 20%, 70%, 30 s | 0.1 · 0.0 | 40 / 40 (77 s) | 17 / 40 (150 s) |
+| 4 min, 20%, 60%, 30 s | 0.0 · 0.1 | 40 / 40 (90 s) | 36 / 40 (210 s) |
+| 5 min, 15%, 50%, 10 s | 3.9 · 1.2 | 40 / 40 (48 s) | 39 / 40 (190 s) |
+| 5 min, 20%, 60%, 10 s | 0.0 · 0.0 | 40 / 40 (81 s) | 35 / 40 (250 s, after the incident ended) |
+
+The backtest confirmed the live observation. The first defaults would have raised about 48
+false alerts per day, far too many for anyone to keep reading alerts.
+
+**The choice: 3-minute windows, cancellation > 20%, revenue drop > 60%, 30 seconds of continuous
+breach before firing.** It gives about 0.7 false alerts per day, detects every payment outage
+within 97 seconds, and detects 33 of 40 four-minute traffic drops while they are still happening.
+- The 10 s variant detects a few more traffic drops (37/40) but triples the false alerts. Alert
+  fatigue is the bigger risk for a dashboard people are supposed to trust.
+- The 5-minute variants are quiet, but detect traffic drops only around the moment a 4-minute
+  incident is already over.
+- **Blind spot, stated honestly:** 4 of the 7 missed traffic drops happened at **4:30 a.m.**, when
+  traffic is about a fifth of the daily average. With so few orders per minute, revenue is too noisy for a
+  60% drop to stand out for 30 seconds. Detecting night-time drops would need a different signal
+  (for example, order *counts* compared with the same hour on previous days).
+
+The backtest is cheap to rerun (about 3 minutes for 10 simulated days), so any future change to a rule
+or threshold can be judged with numbers before it ships.
+
 ### No flapping: hysteresis in time
 A value hovering around its threshold would fire and resolve every few seconds, and people stop
 reading alerts that do that. The alert engine is a small state machine:
-- an alert **fires** only after its rule has been breached **continuously for 10 s**;
+- an alert **fires** only after its rule has been breached **continuously for 30 s** in production
+  (the engine's own default, used by its unit tests, is 10 s);
 - it **resolves** only after the rule has been healthy **continuously for 30 s**;
 - a single healthy second during an incident resets the "healthy for" timer, and vice versa.
 
@@ -721,3 +784,20 @@ locally. The line was removed: the parser built into current Docker already supp
 - An Angular test checked that the fallback snapshot request was sent, but the polling starts on
   an RxJS `timer(0)`, a macrotask. The assertion ran before the timer fired. The test now lets
   one macrotask pass first.
+
+### The benchmark polluted the demo dashboard
+The first screenshots showed a 93.9% cancellation rate and 730 million MAD of revenue in an hour.
+Nothing was broken: the benchmark had just written about 925,000 events into the same database as
+the demo. Its events have uniformly random types and amounts, so it mixed nonsense into every
+"last 60 minutes" figure. Two fixes:
+- The README now runs the benchmark as a **separate compose project** (`docker compose -p rad-bench`),
+  which gets its own database volume.
+- The screenshots were taken on a fresh, separate demo project whose generator **backfills an hour
+  of realistic history** at startup, then triggers a real payment outage so the alert is genuine.
+
+Lesson: load-test data and demo data must never share a database.
+
+### Money displayed two different ways
+Amounts used the `fr-MA` currency format ("730.800.006 MAD", dots as thousands separators) right
+next to counts in English format ("301,139"). Both were locally "correct", but on one screen they
+were confusing. All numbers now use the same grouping ("730,800,006 MAD").

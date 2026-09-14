@@ -27,11 +27,12 @@ class Thresholds:
     # Short enough to catch a few-minute incident, long enough to average out noise
     # (see docs/DECISIONS.md, "Choosing the window").
     window_minutes: int = 3
-    # Cancellations / orders placed in the window.
-    cancellation_rate: float = 0.15
+    # Cancellations / orders placed in the window. 15% raised ~40 false alerts per simulated
+    # day; 20% was chosen with the backtest (python -m rad.alerts.backtest, docs/DECISIONS.md).
+    cancellation_rate: float = 0.20
     cancellation_min_orders: int = 30
     # Fire when the recent revenue rate is more than this fraction below the previous window.
-    revenue_drop_ratio: float = 0.5
+    revenue_drop_ratio: float = 0.6
     revenue_min_baseline_mad_per_min: float = 5_000.0
     # Dead letters / (accepted + dead letters) in the window.
     dead_letter_ratio: float = 0.05

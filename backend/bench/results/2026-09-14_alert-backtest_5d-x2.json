@@ -1,0 +1,264 @@
+{
+  "settings": {
+    "days_per_seed": 5,
+    "seeds": 2,
+    "events_per_second": 20.0,
+    "incident_duration_s": 240,
+    "incidents_per_day": 8,
+    "resolve_after_s": 30.0,
+    "bursts": 4.0
+  },
+  "results": [
+    {
+      "candidate": "3 min, cancel>15%, drop>50%, fire after 10s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 39.5,
+        "revenue_drop": 8.8
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 39,
+          "median_delay_s": 26,
+          "max_delay_s": 53,
+          "missed_at_start_s": [
+            135000
+          ]
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 130.0,
+          "max_delay_s": 250,
+          "missed_at_start_s": []
+        }
+      }
+    },
+    {
+      "candidate": "3 min, cancel>20%, drop>60%, fire after 10s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 1.3,
+        "revenue_drop": 0.7
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 57.0,
+          "max_delay_s": 77,
+          "missed_at_start_s": []
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 37,
+          "median_delay_s": 130,
+          "max_delay_s": 250,
+          "missed_at_start_s": [
+            124200,
+            59400,
+            275400
+          ]
+        }
+      }
+    },
+    {
+      "candidate": "3 min, cancel>20%, drop>60%, fire after 30s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 0.1,
+        "revenue_drop": 0.6
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 77.0,
+          "max_delay_s": 97,
+          "missed_at_start_s": []
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 33,
+          "median_delay_s": 150,
+          "max_delay_s": 210,
+          "missed_at_start_s": [
+            102600,
+            124200,
+            275400,
+            59400,
+            275400,
+            297000,
+            361800
+          ]
+        }
+      }
+    },
+    {
+      "candidate": "3 min, cancel>25%, drop>60%, fire after 30s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 0.0,
+        "revenue_drop": 0.6
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 90.0,
+          "max_delay_s": 129,
+          "missed_at_start_s": []
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 33,
+          "median_delay_s": 150,
+          "max_delay_s": 210,
+          "missed_at_start_s": [
+            102600,
+            124200,
+            275400,
+            59400,
+            275400,
+            297000,
+            361800
+          ]
+        }
+      }
+    },
+    {
+      "candidate": "3 min, cancel>20%, drop>70%, fire after 30s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 0.1,
+        "revenue_drop": 0.0
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 77.0,
+          "max_delay_s": 97,
+          "missed_at_start_s": []
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 17,
+          "median_delay_s": 150,
+          "max_delay_s": 210,
+          "missed_at_start_s": [
+            102600,
+            124200,
+            145800,
+            167400,
+            189000,
+            210600,
+            232200,
+            253800,
+            275400,
+            318600,
+            340200,
+            383400,
+            37800,
+            59400,
+            81000,
+            124200,
+            210600,
+            232200,
+            275400,
+            297000,
+            318600,
+            361800,
+            426600
+          ]
+        }
+      }
+    },
+    {
+      "candidate": "4 min, cancel>20%, drop>60%, fire after 30s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 0.0,
+        "revenue_drop": 0.1
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 90.0,
+          "max_delay_s": 114,
+          "missed_at_start_s": []
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 36,
+          "median_delay_s": 210.0,
+          "max_delay_s": 270,
+          "missed_at_start_s": [
+            253800,
+            59400,
+            297000,
+            361800
+          ]
+        }
+      }
+    },
+    {
+      "candidate": "5 min, cancel>15%, drop>50%, fire after 10s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 3.9,
+        "revenue_drop": 1.2
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 47.5,
+          "max_delay_s": 72,
+          "missed_at_start_s": []
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 39,
+          "median_delay_s": 190,
+          "max_delay_s": 250,
+          "missed_at_start_s": [
+            59400
+          ]
+        }
+      }
+    },
+    {
+      "candidate": "5 min, cancel>20%, drop>60%, fire after 10s",
+      "simulated_days": 10,
+      "false_alerts_per_day": {
+        "cancellation_rate": 0.0,
+        "revenue_drop": 0.0
+      },
+      "detection": {
+        "payment_outage": {
+          "incidents": 40,
+          "detected": 40,
+          "median_delay_s": 81.0,
+          "max_delay_s": 130,
+          "missed_at_start_s": []
+        },
+        "traffic_drop": {
+          "incidents": 40,
+          "detected": 35,
+          "median_delay_s": 250,
+          "max_delay_s": 258,
+          "missed_at_start_s": [
+            232200,
+            59400,
+            145800,
+            297000,
+            361800
+          ]
+        }
+      }
+    }
+  ]
+}
