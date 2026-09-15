@@ -133,7 +133,34 @@ async def run_throughput(
             else:
                 tally.errors += 1
 
+    async def writer_counters(at: float) -> dict[str, Any] | None:
+        """The API's writer counters at a given moment (from /health)."""
+        await asyncio.sleep(max(0.0, at - time.monotonic()))
+        try:
+            response = await client.get("/health")
+            counters: dict[str, Any] = response.json()["writer"]
+            return counters
+        except httpx.HTTPError, KeyError, ValueError:
+            return None
+
+    counters_at_start = asyncio.create_task(writer_counters(measure_from))
+    counters_at_end = asyncio.create_task(writer_counters(stop_at))
     await asyncio.gather(*(sender(i) for i in range(senders)))
+    begin, end = await counters_at_start, await counters_at_end
+
+    # Where the time goes on the server: if the writer spends ~100% of the window waiting for
+    # its insert statement, the database statement is the bottleneck, not the HTTP handlers.
+    server: dict[str, Any] | None = None
+    if begin is not None and end is not None and "insert_seconds_total" in end:
+        batches = int(end["batches"]) - int(begin["batches"])
+        insert_s = float(end["insert_seconds_total"]) - float(begin["insert_seconds_total"])
+        events = int(end["events_inserted"]) - int(begin["events_inserted"])
+        server = {
+            "writer_batches": batches,
+            "avg_events_per_batch": round(events / batches, 1) if batches else None,
+            "avg_insert_statement_ms": round(insert_s / batches * 1000, 1) if batches else None,
+            "writer_busy_fraction": round(insert_s / duration_s, 3),
+        }
     return {
         "senders": senders,
         "batch_size": batch_size,
@@ -145,6 +172,7 @@ async def run_throughput(
         "throttled_429": tally.throttled,
         "errors": tally.errors,
         "ack_latency_ms": summarize_ms(tally.ack_ms),
+        "server": server,
     }
 
 

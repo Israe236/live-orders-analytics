@@ -57,6 +57,9 @@ class WriterStats:
     failed_batches: int = 0
     last_batch_events: int = 0
     last_commit_at: float | None = None
+    # Wall time spent waiting for the insert statement. Compared with elapsed time it shows
+    # whether the single writer is saturated (the database statement is the bottleneck).
+    insert_seconds_total: float = 0.0
 
 
 @dataclass(slots=True)
@@ -279,6 +282,7 @@ class BatchWriter:
 
     async def _write(self, batch: list[_Submission], size: int) -> None:
         events = [event for submission in batch for event in submission.events]
+        started = time.perf_counter()
         try:
             inserted_ids = await self._insert(events)
         except Exception:
@@ -292,6 +296,7 @@ class BatchWriter:
             await asyncio.sleep(self._failure_pause_s)
             return
 
+        self.stats.insert_seconds_total += time.perf_counter() - started
         self._queued_events -= size
         # Attribute each inserted id to exactly one submission, so that the same event sent
         # twice in one batch counts as one insert and one duplicate.

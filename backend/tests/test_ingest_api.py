@@ -144,3 +144,6 @@ async def test_concurrent_requests_are_all_committed(
     assert all(r.status_code == 200 for r in responses)
     assert sum(r.json()["inserted"] for r in responses) == 1_000
     assert await count_rows(db_pool, "events") == 1_000
+    writer = (await client.get("/health")).json()["writer"]
+    assert writer["batches"] >= 1
+    assert writer["insert_seconds_total"] > 0
