@@ -5,6 +5,7 @@ from datetime import timedelta
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rad.alerts.rules import Thresholds
+from rad.processing.retention import RetentionPolicy
 
 
 class Settings(BaseSettings):
@@ -54,6 +55,38 @@ class Settings(BaseSettings):
     # Hysteresis in time: breached this long before firing, healthy this long before resolving.
     alert_fire_after_s: float = 30.0
     alert_resolve_after_s: float = 30.0
+
+    # --- Retention ----------------------------------------------------------------------------
+    retention_enabled: bool = True
+    retention_interval_s: float = 3_600.0
+    # Raw events must outlive max_event_age_seconds (see retention_policy).
+    retention_raw_events_days: float = 8.0
+    retention_orders_days: float = 8.0
+    retention_minute_buckets_days: float = 35.0
+    retention_dead_letters_days: float = 14.0
+    retention_resolved_alerts_days: float = 90.0
+    retention_batch_size: int = 5_000
+
+    def retention_policy(self) -> RetentionPolicy:
+        max_age = self.max_event_age
+        raw = timedelta(days=self.retention_raw_events_days)
+        buckets = timedelta(days=self.retention_minute_buckets_days)
+        # The API accepts events up to max_event_age old. If raw events were deleted sooner, a
+        # retried old event would no longer be recognised as a duplicate and would be counted
+        # twice; if buckets were deleted sooner, a late event would recreate a partial bucket.
+        if raw <= max_age or buckets <= max_age:
+            raise ValueError(
+                "retention of raw events and minute buckets must be longer than "
+                f"max_event_age ({max_age})"
+            )
+        return RetentionPolicy(
+            raw_events=raw,
+            orders=timedelta(days=self.retention_orders_days),
+            minute_buckets=buckets,
+            dead_letters=timedelta(days=self.retention_dead_letters_days),
+            resolved_alerts=timedelta(days=self.retention_resolved_alerts_days),
+            batch_size=self.retention_batch_size,
+        )
 
     def alert_thresholds(self) -> Thresholds:
         return Thresholds(

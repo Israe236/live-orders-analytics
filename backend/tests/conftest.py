@@ -79,8 +79,10 @@ async def start_server(database_url: str, db_pool: DbPool) -> AsyncIterator[Serv
     running: list[tuple[uvicorn.Server, asyncio.Task[None]]] = []
 
     async def start(**overrides: Any) -> LiveServer:
+        # Retention is tested on its own (test_retention.py); keep it out of the server tests.
+        options: dict[str, Any] = {"retention_enabled": False, **overrides}
         settings = Settings(
-            database_url=database_url, db_pool_min_size=1, db_pool_max_size=4, **overrides
+            database_url=database_url, db_pool_min_size=1, db_pool_max_size=4, **options
         )
         app = create_app(settings)
         port = free_port()

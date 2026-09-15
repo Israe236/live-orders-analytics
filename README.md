@@ -27,7 +27,8 @@ That requires more than a chart on top of a database table:
   requests into single transactions, and a bounded queue answers `429` under overload.
 - **Processing (PostgreSQL 18):** per-minute aggregate tables are updated **in the same SQL
   statement** that inserts the events, counting only rows actually inserted (retries never double
-  count). Dashboards read only these small tables.
+  count). Dashboards read only these small tables. An hourly job deletes data past its retention
+  period (8 days of raw events, 35 days of minute buckets) in small batches.
 - **Live push (WebSocket):** one snapshot per second, built once and fanned out to every client.
   Slow clients get conflated state and are evicted if stuck, so they never slow down others.
 - **Alerting:** five threshold rules, time-based hysteresis against flapping, stored and pushed live.
@@ -178,7 +179,7 @@ drop. The full comparison of 8 settings is in [docs/DECISIONS.md](docs/DECISIONS
 
 | Part | Tooling | Tests |
 |---|---|---|
-| Backend | pytest (real PostgreSQL + real uvicorn server), ruff, mypy `--strict` | 112 |
+| Backend | pytest (real PostgreSQL + real uvicorn server), ruff, mypy `--strict` | 116 |
 | `@rad/core` | vitest | 28 |
 | React app | vitest + Testing Library, ESLint | 4 |
 | Angular app | Angular unit-test builder (vitest), angular-eslint | 3 |
@@ -231,7 +232,8 @@ PLAN.md                  milestones and their definition of done
 
 - **One API process.** The WebSocket hub keeps its clients in memory; several API instances would
   not share the live feed. (Metrics stay correct, since they come from the shared database.)
-- **No retention.** Raw events and minute buckets grow forever; there is no partitioning or pruning.
+- **Retention uses batched deletes**, not time partitions. That's fine at this scale, but dropping
+  whole daily partitions would be much cheaper at high volume.
 - "Orders by status" counts **all orders ever seen**, not a rolling window.
 - **Static alert thresholds**, blind to seasonality: in the backtest most missed traffic drops were at
   night. Alert evaluation also stops if the database is down.
@@ -245,7 +247,8 @@ PLAN.md                  milestones and their definition of done
 ## Next steps
 
 - PostgreSQL `LISTEN/NOTIFY` so several API instances can fan out every commit (no Redis needed).
-- Partition `events` by day with a retention job; try `COPY` for higher ingest throughput.
+- Partition `events` by day and drop old partitions instead of deleting rows; try `COPY` for higher
+  ingest throughput.
 - Profile the ingest path under load (and the acknowledgement p99 outlier) before tuning.
 - Rolling 24-hour status counts; seasonality-aware alert baselines (order counts versus the same hour
   on previous days) to catch night-time traffic drops.

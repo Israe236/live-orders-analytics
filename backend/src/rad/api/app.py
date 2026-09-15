@@ -18,6 +18,7 @@ from rad.api.services import Services
 from rad.common.config import Settings
 from rad.db.migrate import apply_migrations
 from rad.db.pool import create_pool
+from rad.processing.retention import RetentionJob
 from rad.processing.writer import BatchWriter
 
 log = logging.getLogger(__name__)
@@ -45,13 +46,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             hub = LiveHub(pool, writer, settings)
             writer.add_listener(hub.on_commit)
+            retention = (
+                RetentionJob(
+                    pool, settings.retention_policy(), interval_s=settings.retention_interval_s
+                )
+                if settings.retention_enabled
+                else None
+            )
             writer.start()
             hub.start()
+            if retention is not None:
+                retention.start()
             app.state.services = Services(settings=settings, pool=pool, writer=writer, hub=hub)
             try:
                 yield
             finally:
                 # Stop pushing first, then drain the write queue, then close the pool.
+                if retention is not None:
+                    await retention.stop()
                 await hub.stop()
                 await writer.stop()
         finally:

@@ -247,6 +247,51 @@ version would need expiring old orders; it is listed as a next step.
   writer, and both bump the same `ingest_minute` row. Each statement holds that single row lock for
   a moment and takes no other lock that the other needs, so they can queue but never deadlock.
 
+### Retention: deleting old data safely
+Without cleanup, every table grows forever. An hourly background job deletes what is older than
+its retention period:
+
+| Data | Kept for (default) | Why this long |
+|---|---|---|
+| Raw events | 8 days | must outlive the 7-day late-event limit (below) |
+| Orders (and their status counts) | 8 days | an order's lifecycle lasts minutes; a week is plenty |
+| Minute buckets (all aggregate tables) | 35 days | the dashboards show at most 24 hours; a month allows comparisons |
+| Dead letters | 14 days | enough time to inspect and replay bad input |
+| Resolved alerts | 90 days | alert history is small and useful; **firing alerts are never deleted** |
+
+Every period is an environment variable (`RAD_RETENTION_*`).
+
+**Why raw events must be kept longer than the late-event limit.** The API accepts events up to 7
+days old, and duplicates are detected because the `event_id` is already in the `events` table. If
+raw events were deleted after 5 days, a producer retrying a 6-day-old event would find nothing,
+the event would be inserted again, and its revenue counted twice. For the same reason minute
+buckets must also outlive that limit, or a late event would recreate a half-empty bucket. The API
+**refuses to start** with a retention shorter than the late-event limit. A mistake in
+configuration becomes an immediate, obvious error instead of silently wrong numbers.
+
+**Small batches instead of one big delete.** `DELETE FROM events WHERE occurred_at < …` on millions
+of rows would run as one huge transaction: long locks, a burst of disk writes, and a lot of dead rows for
+autovacuum to clean at once. The job deletes a few thousand rows per statement and loops until
+nothing is left. Each statement is short, so ingestion keeps flowing between them.
+
+**Orders and their counters change together.** "Orders by status" is a counter table adjusted
+incrementally (section above). Deleting old orders without touching the counters would make them
+drift. The delete runs as one statement that removes the orders *and* subtracts them from the
+counters, so both always agree. A test checks the counters after pruning.
+
+**Only one process prunes at a time.** The job takes a PostgreSQL advisory lock. If several API
+processes run, the others see the lock is taken and skip that round.
+
+**Index choice.** Old orders are found by `first_event_at`, not `last_event_at`. `first_event_at`
+never changes after the insert and grows with insertion order, so a tiny BRIN index is enough.
+`last_event_at` changes on every status update: an index on it would have to be updated on the
+hot write path, and BRIN would be useless because updated rows are no longer in time order on disk.
+
+**What deleting does not do.** PostgreSQL does not give disk space back to the operating system
+after a `DELETE`; autovacuum marks the space as reusable for new rows. The database stops *growing*,
+but its files do not shrink. At much higher volume the better design is **daily partitions**: dropping
+yesterday's partition is instant and returns the space. That is listed as a next step.
+
 ---
 
 ## 5. Event generator
