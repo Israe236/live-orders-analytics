@@ -99,7 +99,8 @@ real alert engine; nothing is staged in the UI.
 
 ![Angular dashboard with a firing cancellation-rate alert](docs/images/angular-dashboard.png)
 
-The React Native app is not pictured because it has not been run on a device yet (see Limitations).
+The React Native app is not pictured; it runs live on a real phone through Expo Go (setup in
+[its README](frontends/mobile-react-native/README.md)).
 
 ## Performance (measured)
 
@@ -244,9 +245,8 @@ PLAN.md                  milestones and their definition of done
 - Alert thresholds were tuned on the **simulator's** traffic; real traffic would need its own backtest.
 - **No authentication or TLS** on the API or WebSocket.
 - End-to-end latency cannot go below the **1-second push tick** by design.
-- The benchmark ran on one laptop, client and server sharing CPUs, one run.
-- The React Native app is verified by type checking, unit tests and a Metro bundle, **not yet on a
-  physical device**.
+- Benchmarks ran on one laptop, client and server sharing CPUs; identical runs varied by up to ~40%.
+- The React Native app was tested on a real phone through Expo Go, not as a store build.
 
 ## Next steps
 
