@@ -13,6 +13,7 @@ from rad.db.pool import DbPool
 # still-filling minute. Ranges are half-open on the left so no bucket is counted twice.
 _EVENT_WINDOWS_SQL = """
 SELECT coalesce(sum(placed_count)    FILTER (WHERE bucket >= $2), 0)::bigint AS placed,
+       coalesce(sum(placed_count)    FILTER (WHERE bucket <  $2), 0)::bigint AS placed_previous,
        coalesce(sum(cancelled_count) FILTER (WHERE bucket >= $2), 0)::bigint AS cancelled,
        coalesce(sum(revenue_mad)     FILTER (WHERE bucket >= $2), 0)         AS revenue_recent,
        coalesce(sum(revenue_mad)     FILTER (WHERE bucket <  $2), 0)         AS revenue_previous
@@ -45,6 +46,7 @@ async def fetch_window_stats(
         recent_seconds=(now - recent_start).total_seconds(),
         previous_seconds=window_minutes * 60.0,
         placed=int(events["placed"]),
+        placed_previous=int(events["placed_previous"]),
         cancelled=int(events["cancelled"]),
         revenue_recent=float(events["revenue_recent"]),
         revenue_previous=float(events["revenue_previous"]),

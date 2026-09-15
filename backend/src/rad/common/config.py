@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     alert_cancellation_min_orders: int = 30
     alert_revenue_drop_ratio: float = 0.6
     alert_revenue_min_baseline_mad_per_min: float = 5_000.0
+    alert_orders_drop_ratio: float = 0.6
+    alert_orders_min_baseline_per_min: float = 10.0
     alert_dead_letter_ratio: float = 0.05
     alert_dead_letter_min_events: int = 100
     alert_stall_after_s: float = 30.0
@@ -60,6 +62,8 @@ class Settings(BaseSettings):
             cancellation_min_orders=self.alert_cancellation_min_orders,
             revenue_drop_ratio=self.alert_revenue_drop_ratio,
             revenue_min_baseline_mad_per_min=self.alert_revenue_min_baseline_mad_per_min,
+            orders_drop_ratio=self.alert_orders_drop_ratio,
+            orders_min_baseline_per_min=self.alert_orders_min_baseline_per_min,
             dead_letter_ratio=self.alert_dead_letter_ratio,
             dead_letter_min_events=self.alert_dead_letter_min_events,
             stall_after_s=self.alert_stall_after_s,

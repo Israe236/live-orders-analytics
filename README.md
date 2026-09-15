@@ -30,7 +30,7 @@ That requires more than a chart on top of a database table:
   count). Dashboards read only these small tables.
 - **Live push (WebSocket):** one snapshot per second, built once and fanned out to every client.
   Slow clients get conflated state and are evicted if stuck, so they never slow down others.
-- **Alerting:** four threshold rules, time-based hysteresis against flapping, stored and pushed live.
+- **Alerting:** five threshold rules, time-based hysteresis against flapping, stored and pushed live.
 - **Three clients** sharing one TypeScript core (`@rad/core`): reconnection with backoff, message
   types, and a state reducer that lets unchanged UI sections skip re-rendering.
 
@@ -151,6 +151,7 @@ Evaluated every second on 3-minute windows read from the aggregate tables.
 |---|---|---|---|
 | `cancellation_rate` | cancellations ÷ orders placed > **20%** | ≥ 30 orders in the window | warning |
 | `revenue_drop` | revenue per minute more than **60%** below the previous window | previous window ≥ 5,000 MAD/min | critical |
+| `orders_drop` | orders per minute more than **60%** below the previous window | previous window ≥ 10 orders/min | critical |
 | `dead_letter_ratio` | rejected ÷ received events > **5%** | ≥ 100 events in the window | warning |
 | `pipeline_stalled` | no event stored for **30 s** | — | critical |
 
@@ -166,16 +167,18 @@ outages and 40 traffic drops (4 minutes each):
 | Settings | False alerts / day | Payment outages detected | Traffic drops detected |
 |---|---|---|---|
 | First defaults: 15%, 50%, 10 s | 48.3 | 39 / 40 (median 26 s) | 40 / 40 (median 130 s) |
-| **Chosen: 20%, 60%, 30 s** | **0.7** | **40 / 40 (median 77 s)** | **33 / 40 (median 150 s)** |
+| 20%, 60%, 30 s | 0.7 | 40 / 40 (median 77 s) | 33 / 40 (median 150 s) |
+| **Current: same + orders down > 60%** | **0.9** | **40 / 40 (median 77 s)** | **36 / 40 (median 150 s)** |
 
-Most missed traffic drops happen around 4 a.m., when traffic is too low for revenue to show a clear
+The order-count rule halves the night-time misses of the revenue rule; 2 of 5 drops at 4 a.m. are
+still missed, when traffic is too low for revenue or order counts to show a clear
 drop. The full comparison of 8 settings is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Tests and CI
 
 | Part | Tooling | Tests |
 |---|---|---|
-| Backend | pytest (real PostgreSQL + real uvicorn server), ruff, mypy `--strict` | 106 |
+| Backend | pytest (real PostgreSQL + real uvicorn server), ruff, mypy `--strict` | 112 |
 | `@rad/core` | vitest | 28 |
 | React app | vitest + Testing Library, ESLint | 4 |
 | Angular app | Angular unit-test builder (vitest), angular-eslint | 3 |

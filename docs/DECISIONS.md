@@ -423,6 +423,7 @@ PostgreSQL `LISTEN/NOTIFY`, so every process hears about every commit.
 |---|---|---|---|
 | `cancellation_rate` | cancellations ÷ orders placed in the last 3 min **> 20%** | at least 30 orders in the window | warning |
 | `revenue_drop` | revenue per minute in the last 3 min is **more than 60% below** the 3 min before | previous window ≥ 5,000 MAD/min | critical |
+| `orders_drop` | orders placed per minute in the last 3 min are **more than 60% below** the 3 min before | previous window ≥ 10 orders/min | critical |
 | `dead_letter_ratio` | rejected ÷ (accepted + rejected) in the last 3 min **> 5%** | at least 100 events in the window | warning |
 | `pipeline_stalled` | no event stored for **30 s** | — | critical |
 
@@ -520,6 +521,29 @@ within 97 seconds, and detects 33 of 40 four-minute traffic drops while they are
 
 The backtest is cheap to rerun (about 3 minutes for 10 simulated days), so any future change to a rule
 or threshold can be judged with numbers before it ships.
+
+### Closing part of the night-time blind spot: an order-count rule
+Revenue is noisy at night because a handful of expensive orders can swing it. The number of
+orders is not affected by prices, so a second rule, `orders_drop`, compares orders placed per
+minute with the previous window, using the same partial-window rates as the revenue rule. It was
+added only after the backtest (same 10 simulated days, 40 traffic drops) showed what it costs:
+
+| Orders rule | Extra false alerts / day | Traffic drops detected (by either rule) | Missed at 4:30 a.m. |
+|---|---|---|---|
+| none (previous defaults) | 0 | 33 / 40 | 4 of 5 |
+| orders down > 40% | 13.0 | 40 / 40 | 0 |
+| orders down > 50% | 5.8 | 40 / 40 | 0 |
+| **orders down > 60% (chosen)** | **0.2** | **36 / 40** | **2 of 5** |
+
+Order counts turned out noisier than expected. A flash sale multiplies orders for 30 seconds, so the
+previous window can hold far more orders than normal, and ordinary traffic right after it looks
+like a drop. Revenue reacts less to that because payments trickle in later. At 40–50% the new rule
+caught every incident but would page someone several times a day. At 60% it adds one false alert
+every five days and catches half of the night-time drops the revenue rule missed.
+
+Raw output: `backend/bench/results/2026-09-15_alert-backtest_orders-rule_5d-x2.json`. The remaining
+gap (2 of 5 night-time drops) would need a baseline that ignores bursts, for example comparing
+with the same hour on previous days.
 
 ### No flapping: hysteresis in time
 A value hovering around its threshold would fire and resolve every few seconds, and people stop

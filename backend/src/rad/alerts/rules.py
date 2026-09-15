@@ -18,6 +18,7 @@ class Severity(StrEnum):
 class RuleName(StrEnum):
     CANCELLATION_RATE = "cancellation_rate"
     REVENUE_DROP = "revenue_drop"
+    ORDERS_DROP = "orders_drop"
     DEAD_LETTER_RATIO = "dead_letter_ratio"
     PIPELINE_STALLED = "pipeline_stalled"
 
@@ -34,6 +35,11 @@ class Thresholds:
     # Fire when the recent revenue rate is more than this fraction below the previous window.
     revenue_drop_ratio: float = 0.6
     revenue_min_baseline_mad_per_min: float = 5_000.0
+    # Same comparison on the number of orders placed: counts are not swung by a few expensive
+    # orders, so some night-time drops that revenue misses become visible. Backtest: 50% added
+    # ~6 false alerts/day (flash sales inflate the previous window), 60% added 0.2.
+    orders_drop_ratio: float = 0.6
+    orders_min_baseline_per_min: float = 10.0
     # Dead letters / (accepted + dead letters) in the window.
     dead_letter_ratio: float = 0.05
     dead_letter_min_events: int = 100
@@ -53,6 +59,7 @@ class WindowStats:
     recent_seconds: float
     previous_seconds: float
     placed: int
+    placed_previous: int
     cancelled: int
     revenue_recent: float
     revenue_previous: float
@@ -94,16 +101,27 @@ def cancellation_rate_rule(stats: WindowStats, t: Thresholds) -> RuleResult:
     )
 
 
+def _drop(
+    recent: float, previous: float, recent_seconds: float, previous_seconds: float
+) -> tuple[float, float] | None:
+    """Per-minute rates of two windows of different elapsed lengths; None if not comparable."""
+    if recent_seconds <= 0 or previous_seconds <= 0:
+        return None
+    return recent / recent_seconds * 60, previous / previous_seconds * 60
+
+
 def revenue_drop_rule(stats: WindowStats, t: Thresholds) -> RuleResult:
     def result(breached: bool, value: float | None, message: str) -> RuleResult:
         return RuleResult(
             RuleName.REVENUE_DROP, Severity.CRITICAL, breached, value, t.revenue_drop_ratio, message
         )
 
-    if stats.recent_seconds <= 0 or stats.previous_seconds <= 0:
+    rates = _drop(
+        stats.revenue_recent, stats.revenue_previous, stats.recent_seconds, stats.previous_seconds
+    )
+    if rates is None:
         return result(False, None, "windows not available yet")
-    previous_per_min = stats.revenue_previous / stats.previous_seconds * 60
-    recent_per_min = stats.revenue_recent / stats.recent_seconds * 60
+    recent_per_min, previous_per_min = rates
     if previous_per_min < t.revenue_min_baseline_mad_per_min:
         return result(False, None, f"baseline too small ({previous_per_min:,.0f} MAD/min)")
     drop = 1 - recent_per_min / previous_per_min
@@ -112,6 +130,27 @@ def revenue_drop_rule(stats: WindowStats, t: Thresholds) -> RuleResult:
         drop,
         f"Revenue down {drop:.0%} vs the previous {t.window_minutes} min "
         f"({recent_per_min:,.0f} vs {previous_per_min:,.0f} MAD/min)",
+    )
+
+
+def orders_drop_rule(stats: WindowStats, t: Thresholds) -> RuleResult:
+    def result(breached: bool, value: float | None, message: str) -> RuleResult:
+        return RuleResult(
+            RuleName.ORDERS_DROP, Severity.CRITICAL, breached, value, t.orders_drop_ratio, message
+        )
+
+    rates = _drop(stats.placed, stats.placed_previous, stats.recent_seconds, stats.previous_seconds)
+    if rates is None:
+        return result(False, None, "windows not available yet")
+    recent_per_min, previous_per_min = rates
+    if previous_per_min < t.orders_min_baseline_per_min:
+        return result(False, None, f"baseline too small ({previous_per_min:,.0f} orders/min)")
+    drop = 1 - recent_per_min / previous_per_min
+    return result(
+        drop > t.orders_drop_ratio,
+        drop,
+        f"Orders down {drop:.0%} vs the previous {t.window_minutes} min "
+        f"({recent_per_min:,.0f} vs {previous_per_min:,.0f} orders/min)",
     )
 
 
@@ -156,6 +195,7 @@ def evaluate_rules(stats: WindowStats, t: Thresholds, *, started_at: datetime) -
     return [
         cancellation_rate_rule(stats, t),
         revenue_drop_rule(stats, t),
+        orders_drop_rule(stats, t),
         dead_letter_ratio_rule(stats, t),
         pipeline_stalled_rule(stats, t, started_at=started_at),
     ]

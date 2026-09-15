@@ -85,6 +85,7 @@ async def test_window_stats_split_recent_and_previous_windows(db_pool: DbPool) -
     # Current window: 19:56:00 → 20:00:30 (270 s). Previous window: 19:51 → 19:55:59.
     assert (stats.recent_seconds, stats.previous_seconds) == (270.0, 300.0)
     assert (stats.placed, stats.cancelled) == (4, 1)
+    assert stats.placed_previous == 0  # no order was placed between 19:51 and 19:55
     assert (stats.revenue_recent, stats.revenue_previous) == (30.0, 100.0)
     assert (stats.accepted, stats.dead_letters) == (200, 20)
 

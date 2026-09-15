@@ -11,7 +11,7 @@ known: every incident is injected at a chosen time. Events are summed per second
 and the *production* rule functions and ``AlertEngine`` are evaluated once per simulated second
 with the same windows as the live hub: aligned on minute buckets, current minute partly filled.
 
-    python -m rad.alerts.backtest --days 2 --seeds 2
+    python -m rad.alerts.backtest --days 5 --seeds 2
 """
 
 import argparse
@@ -20,7 +20,7 @@ import math
 import sys
 import time
 from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import accumulate
 from statistics import median
@@ -35,17 +35,18 @@ from rad.alerts.rules import (
     Thresholds,
     WindowStats,
     cancellation_rate_rule,
+    orders_drop_rule,
     revenue_drop_rule,
 )
 from rad.common.events import EventType
 from rad.generator.simulator import CASABLANCA_TZ, Anomaly, OrderStreamSimulator, SimulatorConfig
 
-# The rule each kind of incident is expected to trigger.
-EXPECTED_RULE = {
-    Anomaly.PAYMENT_OUTAGE: RuleName.CANCELLATION_RATE,
-    Anomaly.TRAFFIC_DROP: RuleName.REVENUE_DROP,
+# The rules that count as detecting each kind of incident.
+EXPECTED_RULES: dict[Anomaly, frozenset[RuleName]] = {
+    Anomaly.PAYMENT_OUTAGE: frozenset({RuleName.CANCELLATION_RATE}),
+    Anomaly.TRAFFIC_DROP: frozenset({RuleName.REVENUE_DROP, RuleName.ORDERS_DROP}),
 }
-EVALUATED_RULES = (RuleName.CANCELLATION_RATE, RuleName.REVENUE_DROP)
+EVALUATED_RULES = (RuleName.CANCELLATION_RATE, RuleName.REVENUE_DROP, RuleName.ORDERS_DROP)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +134,7 @@ def evaluate(
             recent_seconds=now - recent_start,
             previous_seconds=float(window_s),
             placed=placed[second] - placed[recent_index],
+            placed_previous=placed[recent_index] - placed[previous_index],
             cancelled=cancelled[second] - cancelled[recent_index],
             revenue_recent=revenue[second] - revenue[recent_index],
             revenue_previous=revenue[recent_index] - revenue[previous_index],
@@ -143,6 +145,7 @@ def evaluate(
         results: list[RuleResult] = [
             cancellation_rate_rule(stats, thresholds),
             revenue_drop_rule(stats, thresholds),
+            orders_drop_rule(stats, thresholds),
         ]
         transitions.extend((second, alert) for alert in engine.update(results, moment))
     return transitions
@@ -154,6 +157,8 @@ class Detection:
     start_s: int
     detected: bool
     delay_s: int | None
+    # First firing delay of each expected rule that fired during the incident.
+    delay_by_rule: dict[str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,8 +174,8 @@ def score(
     attribution_s: int,
 ) -> Score:
     """Alerts starting during an incident (or up to ``attribution_s`` after it) are attributed to
-    it; any other alert is a false alert. An incident counts as detected when its expected rule
-    fires during that period."""
+    it; any other alert is a false alert. An incident counts as detected when one of its expected
+    rules fires during that period."""
     firing = [
         (second, alert) for second, alert in transitions if alert.status is AlertStatus.FIRING
     ]
@@ -185,17 +190,17 @@ def score(
 
     detections = []
     for incident in incidents:
-        hits = [
-            second
-            for second, alert in firing
-            if alert.rule is EXPECTED_RULE[incident.kind] and during(second, incident)
-        ]
+        delay_by_rule: dict[str, int] = {}
+        for second, alert in firing:
+            if alert.rule in EXPECTED_RULES[incident.kind] and during(second, incident):
+                delay_by_rule.setdefault(alert.rule.value, second - incident.start_s)
         detections.append(
             Detection(
                 kind=incident.kind.value,
                 start_s=incident.start_s,
-                detected=bool(hits),
-                delay_s=hits[0] - incident.start_s if hits else None,
+                detected=bool(delay_by_rule),
+                delay_s=min(delay_by_rule.values()) if delay_by_rule else None,
+                delay_by_rule=delay_by_rule,
             )
         )
     return Score(false_alerts=false_alerts, detections=detections)
@@ -213,25 +218,32 @@ class Candidate:
     fire_after_s: float
 
 
-def candidate(window: int, cancel: float, drop: float, fire_after_s: float) -> Candidate:
+def candidate(
+    window: int, cancel: float, drop: float, fire_after_s: float, orders: float
+) -> Candidate:
+    # An orders_drop_ratio of 1.0 can never be exceeded: it switches the orders rule off.
+    orders_label = "orders rule off" if orders >= 1 else f"orders>{orders:.0%}"
     return Candidate(
-        name=f"{window} min, cancel>{cancel:.0%}, drop>{drop:.0%}, fire after {fire_after_s:.0f}s",
+        name=(
+            f"{window} min, cancel>{cancel:.0%}, revenue>{drop:.0%}, {orders_label}, "
+            f"fire after {fire_after_s:.0f}s"
+        ),
         thresholds=Thresholds(
-            window_minutes=window, cancellation_rate=cancel, revenue_drop_ratio=drop
+            window_minutes=window,
+            cancellation_rate=cancel,
+            revenue_drop_ratio=drop,
+            orders_drop_ratio=orders,
         ),
         fire_after_s=fire_after_s,
     )
 
 
 CANDIDATES: list[Candidate] = [
-    candidate(3, 0.15, 0.50, 10),  # the first defaults
-    candidate(3, 0.20, 0.60, 10),
-    candidate(3, 0.20, 0.60, 30),
-    candidate(3, 0.25, 0.60, 30),
-    candidate(3, 0.20, 0.70, 30),
-    candidate(4, 0.20, 0.60, 30),
-    candidate(5, 0.15, 0.50, 10),
-    candidate(5, 0.20, 0.60, 10),
+    candidate(3, 0.20, 0.60, 30, orders=1.0),  # current defaults, no orders rule
+    candidate(3, 0.20, 0.60, 30, orders=0.4),
+    candidate(3, 0.20, 0.60, 30, orders=0.5),
+    candidate(3, 0.20, 0.60, 30, orders=0.6),
+    candidate(3, 0.20, 0.60, 10, orders=0.5),
 ]
 
 
@@ -250,9 +262,13 @@ def summarize(name: str, days: int, scores: list[Score]) -> dict[str, Any]:
     for kind in (a.value for a in Anomaly):
         of_kind = [d for d in detections if d.kind == kind]
         delays = [d.delay_s for d in of_kind if d.delay_s is not None]
+        rules = sorted({rule for d in of_kind for rule in d.delay_by_rule})
         by_kind[kind] = {
             "incidents": len(of_kind),
             "detected": sum(d.detected for d in of_kind),
+            "detected_by_rule": {
+                rule: sum(1 for d in of_kind if rule in d.delay_by_rule) for rule in rules
+            },
             "median_delay_s": median(delays) if delays else None,
             "max_delay_s": max(delays) if delays else None,
             "missed_at_start_s": [d.start_s for d in of_kind if not d.detected],
@@ -310,7 +326,7 @@ def run(
             "incident_duration_s": incident_duration_s,
             "incidents_per_day": len(INCIDENT_HOURS),
             "resolve_after_s": resolve_after_s,
-            "bursts": asdict(SimulatorConfig())["bursts_per_hour"],
+            "bursts_per_hour": SimulatorConfig().bursts_per_hour,
         },
         "results": [summarize(name, days, runs) for name, runs in scores.items()],
     }
@@ -320,18 +336,20 @@ def print_table(results: list[dict[str, Any]]) -> None:
     """Compact human summary on stderr (the JSON on stdout has every detail)."""
 
     def detection(entry: dict[str, Any]) -> str:
+        by_rule = ", ".join(f"{rule} {count}" for rule, count in entry["detected_by_rule"].items())
         return (
             f"{entry['detected']}/{entry['incidents']} "
-            f"(median {entry['median_delay_s']} s, max {entry['max_delay_s']} s)"
+            f"(median {entry['median_delay_s']} s, max {entry['max_delay_s']} s; {by_rule})"
         )
 
     for row in results:
         false_per_day = row["false_alerts_per_day"]
         print(
-            f"{row['candidate']:<48} | false/day cancel {false_per_day['cancellation_rate']:>5}"
-            f" revenue {false_per_day['revenue_drop']:>5}"
-            f" | outage {detection(row['detection']['payment_outage']):<34}"
-            f" | traffic drop {detection(row['detection']['traffic_drop'])}",
+            f"{row['candidate']}\n"
+            f"    false/day: cancellation {false_per_day['cancellation_rate']},"
+            f" revenue {false_per_day['revenue_drop']}, orders {false_per_day['orders_drop']}\n"
+            f"    payment outages: {detection(row['detection']['payment_outage'])}\n"
+            f"    traffic drops:   {detection(row['detection']['traffic_drop'])}",
             file=sys.stderr,
         )
 

@@ -16,6 +16,7 @@ from rad.alerts.rules import (
     cancellation_rate_rule,
     dead_letter_ratio_rule,
     evaluate_rules,
+    orders_drop_rule,
     pipeline_stalled_rule,
     revenue_drop_rule,
 )
@@ -27,6 +28,7 @@ BASE = WindowStats(
     recent_seconds=300,
     previous_seconds=300,
     placed=1_000,
+    placed_previous=1_000,
     cancelled=50,
     revenue_recent=500_000,
     revenue_previous=500_000,
@@ -85,6 +87,31 @@ def test_revenue_drop_compares_rates_so_a_partial_window_is_fair() -> None:
     result = revenue_drop_rule(stats, T)
     assert result.value == pytest.approx(0.0)
     assert not result.breached
+
+
+# --- orders drop ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("recent", "previous", "breached"),
+    [
+        (400, 1_000, False),  # exactly a 60% drop: not above the threshold
+        (399, 1_000, True),
+        (1_500, 1_000, False),  # more orders is never an alert
+        (0, 20, False),  # previous 4 orders/min is below the 10 orders/min baseline
+    ],
+)
+def test_orders_drop_rule(recent: int, previous: int, breached: bool) -> None:
+    result = orders_drop_rule(replace(BASE, placed=recent, placed_previous=previous), T)
+    assert result.breached is breached
+    assert result.severity is Severity.CRITICAL
+
+
+def test_orders_drop_ignores_revenue() -> None:
+    # Same number of orders but much cheaper ones: revenue drops, traffic does not.
+    stats = replace(BASE, revenue_recent=100_000)
+    assert revenue_drop_rule(stats, T).breached
+    assert not orders_drop_rule(stats, T).breached
 
 
 # --- dead letters ----------------------------------------------------------------------------
