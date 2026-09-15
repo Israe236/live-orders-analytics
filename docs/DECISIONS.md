@@ -814,7 +814,85 @@ makes the measurement a slight **upper bound** (it can only overstate latency, n
 
 ---
 
-## 11. Problems met and how they were solved
+## 11. Profiling the ingest path
+
+### The question
+The benchmark measured about 15–18k events/s and occasional acknowledgement spikes above a
+second. Before changing anything, the goal was to find out **where the time goes**: in the
+Python API (JSON parsing, validation) or in PostgreSQL, and whether the spikes come from the
+database's periodic checkpoints.
+
+### How it was measured
+Three independent views of the same load (8 senders × 500-event batches, 60 s after warm-up):
+1. **Writer counters.** The batch writer records the total time it spends waiting for its insert
+   statement (`insert_seconds_total` in `/health`). The benchmark reads it at the start and end of
+   the window. Time spent waiting ÷ window length = how busy the single writer is.
+2. **CPU per container**, sampled every two seconds during the run (100% = one full core).
+3. **`EXPLAIN ANALYZE`** of the insert statement on a realistic 2,000-event batch, run inside a
+   transaction that is rolled back (`backend/bench/explain-insert.sql`), to time each part of the statement.
+
+One mistake along the way: the first CPU sampling ran *after* the benchmark instead of during it
+(the two commands were not really concurrent), and showed an idle database. The numbers made no
+sense (PostgreSQL at 6% while inserting thousands of rows a second), so they were thrown away and
+sampling was rerun as a background job overlapping the load.
+
+### Where the time goes
+| Part of one 2,000-event write | Time | Share |
+|---|---|---|
+| Upsert into `orders` (current status of each order) | ~75 ms | ~55–60% |
+| Insert into `events` | ~36–60 ms | ~40% |
+| All aggregate updates (minute totals, dimensions, status counters, ingest stats) | ~4 ms | ~3% |
+
+- The single writer was busy **95–98% of the time** in every run. The API process used about a
+  third of a core, PostgreSQL about one core (its insert statement runs on one core).
+- **The limit is the one insert statement, not Python.** Faster JSON parsing or validation would
+  not raise throughput; the handlers are already waiting for the database.
+- The incremental aggregates, the heart of the design, cost almost nothing. The cost is two
+  index-heavy row writes per event. The benchmark is also a worst case for `orders`: every
+  benchmark event has a new order id, whereas the generator reuses each order for about 3 events.
+
+### Tuning PostgreSQL: tried, measured, not adopted
+PostgreSQL in Docker runs with small defaults (128 MB `shared_buffers`, a checkpoint forced every
+1 GB of WAL, a 4 MB WAL buffer). A classic write-heavy tuning was tested **without any durability
+trade-off**: 512 MB `shared_buffers`, 4 GB `max_wal_size`, 16 MB `wal_buffers`, 15-minute checkpoints.
+(Turning off `synchronous_commit` would be much faster but would break the promise that `200 OK`
+means "stored", so it was not considered.)
+
+Each run used a brand-new database; the second pair ran in reverse order to expose ordering effects.
+Raw results: `backend/bench/results/2026-09-15_profiling/`.
+
+| Run order | Settings | Events/s | Avg write | Writer busy | CPU median PostgreSQL / API |
+|---|---|---|---|---|---|
+| 1 | defaults | 18,750 | 101 ms | 0.975 | 67% / 36% |
+| 2 | tuned | 10,067 | 184 ms | 0.970 | 81% / 34% |
+| 3 | tuned | 9,592 | 166 ms | 0.945 | 75% / 34% |
+| 4 | defaults | 10,575 | 185 ms | 0.981 | 75% / 39% |
+
+- **The same default settings gave 18,750 and 10,575 events/s.** On this laptop the noise between
+  identical runs (probably CPU power and thermal management, which the benchmark does not control)
+  is larger than the effect being tested.
+- The tuned runs fall inside that range, so the tuning showed **no measurable benefit** and was not
+  adopted. A configuration change without evidence is just one more thing to maintain.
+- **Checkpoints do not explain the spikes.** In these 60-second runs on fresh databases both settings
+  recorded the same single checkpoint (most likely the one at database startup), yet acknowledgement
+  spikes of 1–2 seconds appeared with both. Their cause is still open.
+
+### What would actually raise throughput (not done)
+Everything goes through one insert statement at a time. Running several writers in parallel would
+use more cores, but every batch updates the same few "hot" rows (the current minute bucket, the
+status counters), so parallel transactions would wait on each other's row locks, and could even
+deadlock if they locked rows in different orders. Doing it safely means either sorting every upsert
+so locks are always taken in the same order, or moving the aggregate updates out of the insert
+transaction and giving up the "events and aggregates always agree" guarantee. Both are real design
+trade-offs, recorded here as a next step rather than rushed in.
+
+**Lesson:** measure before tuning. The "obvious" fix (bigger PostgreSQL buffers) changed nothing
+measurable. The measurement that mattered, the writer's busy time, took about thirty lines of code
+and is kept in `/health` and the benchmark output.
+
+---
+
+## 12. Problems met and how they were solved
 
 ### The Python virtual environment was very slow to install
 The project folder is on the Windows drive, while Python runs inside WSL (Linux). Creating the

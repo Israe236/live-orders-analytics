@@ -127,9 +127,13 @@ How to read these numbers:
   half a second for the next dashboard update. The p50 of 563 ms is consistent with that.
 - The end-to-end measurement is a slight **upper bound**: a batch counts as delivered with the first
   update generated after the API *acknowledged* it, and the acknowledgement comes just after the commit.
-- In run 1 the acknowledgement p99 reached 1,122 ms at only 500 events/s. On the clean database
-  (run 2) it was 133 ms. That points to database state (a larger, busier database), but the cause
-  was not profiled, so this is a hypothesis, not a finding.
+- In run 1 the acknowledgement p99 reached 1,122 ms at only 500 events/s; on the clean database
+  (run 2) it was 133 ms. Later profiling ruled out PostgreSQL checkpoints as the cause of such
+  spikes; the cause is still open.
+- **Profiling** ([docs/DECISIONS.md](docs/DECISIONS.md)): at maximum load the single database writer
+  is busy 95–98% of the time and PostgreSQL uses about one core, while the API process uses about a
+  third of one. The limit is the insert statement, not Python. Identical profiling runs on this laptop
+  ranged from 10,575 to 18,750 events/s, and PostgreSQL buffer tuning showed no measurable gain.
 - Two runs on a laptop, not a controlled lab. Treat the numbers as an order of magnitude.
 
 Reproduce:
@@ -249,7 +253,8 @@ PLAN.md                  milestones and their definition of done
 - PostgreSQL `LISTEN/NOTIFY` so several API instances can fan out every commit (no Redis needed).
 - Partition `events` by day and drop old partitions instead of deleting rows; try `COPY` for higher
   ingest throughput.
-- Profile the ingest path under load (and the acknowledgement p99 outlier) before tuning.
+- Scale writes past the single writer, which profiling identified as the limit: parallel writers
+  with a consistent lock order on the hot aggregate rows.
 - Rolling 24-hour status counts; seasonality-aware alert baselines (order counts versus the same hour
   on previous days) to catch night-time traffic drops.
 - Authentication for producers and dashboards; TLS termination at nginx.

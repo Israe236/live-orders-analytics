@@ -1,0 +1,13 @@
+# Candidate PostgreSQL settings for a write-heavy workload (durability unchanged).
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - checkpoint_timeout=15min

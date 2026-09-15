@@ -1,0 +1,48 @@
+{
+  "started_at": "2026-09-15T18:16:18.582489+00:00",
+  "machine": {
+    "python": "3.14.7",
+    "platform": "Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "logical_cpus": 8,
+    "cpu_model": "13th Gen Intel(R) Core(TM) i7-13620H",
+    "memory_gb": 10.7
+  },
+  "settings": {
+    "api_url": "http://api:8000",
+    "ws_url": "ws://api:8000/ws/live",
+    "senders": 8,
+    "batch_size": 500,
+    "duration": 60.0,
+    "warmup": 10.0,
+    "latency_rate": 500.0,
+    "latency_batch_size": 50,
+    "latency_duration": 60.0,
+    "skip_throughput": false,
+    "skip_latency": true
+  },
+  "throughput": {
+    "senders": 8,
+    "batch_size": 500,
+    "warmup_s": 10.0,
+    "measured_s": 60.0,
+    "events_committed": 1125000,
+    "events_per_second": 18750.0,
+    "requests": 2250,
+    "throttled_429": 0,
+    "errors": 0,
+    "ack_latency_ms": {
+      "count": 2250,
+      "p50": 192.7,
+      "p95": 318.3,
+      "p99": 509.5,
+      "max": 1288.9
+    },
+    "server": {
+      "writer_batches": 577,
+      "avg_events_per_batch": 1949.7,
+      "avg_insert_statement_ms": 101.3,
+      "writer_busy_fraction": 0.975
+    }
+  },
+  "finished_at": "2026-09-15T18:17:34.045417+00:00"
+}
